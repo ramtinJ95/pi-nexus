@@ -24,7 +24,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Action } from "../commands.ts";
 import type { NodeSummary, Preview, ThreadDetail } from "../contract.ts";
-import type { ThreadView } from "../thread.ts";
+import { portBusy, type ThreadView } from "../thread.ts";
 import { detailLines, portLines } from "./inspector.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
 import {
@@ -578,7 +578,7 @@ export class ThreadScreen implements Component, Focusable {
 		}
 		const pending = this.portChanges.get(port)?.pending;
 		if (pending) {
-			this.say(`Port ${port} is ${pending === "open" ? "opening" : "closing"} already.`);
+			this.say(portBusy(this.options.thread, port));
 			return undefined;
 		}
 		return port;
@@ -801,7 +801,7 @@ export class ThreadScreen implements Component, Focusable {
 		if (row === undefined) return this.say("No port listens yet.");
 		const port = row.kind === "port" ? row.port.port : row.port;
 		const canRun = this.detail?.thread.status === "active" || this.detail?.thread.status === "idle";
-		const action = portAction(row, port === undefined ? noChange : (this.portChanges.get(port) ?? noChange), canRun, want);
+		const action = portAction(this.options.thread, row, port === undefined ? noChange : (this.portChanges.get(port) ?? noChange), canRun, want);
 		if (action.kind === "none") return this.say(action.why);
 		void (action.kind === "open" ? this.openPort(String(action.port)) : this.unpublishPort(String(action.port)));
 	}

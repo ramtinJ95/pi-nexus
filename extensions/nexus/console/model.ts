@@ -5,7 +5,7 @@
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, Preview, Project, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
-import { contentText, lastActivityAt, workingCount } from "../thread.ts";
+import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
 import type { Seen } from "../store.ts";
 
 /** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
@@ -457,16 +457,18 @@ export function portRows({ previews, ports }: Pick<ThreadDetail, "previews" | "p
 /**
  * What publishing (Enter) or unpublishing (x) does on a port row, or why it does nothing: only a port with no
  * preview publishes, and only a port's own preview unpublishes, since a service keeps its preview. A port already
- * changing waits.
+ * changing is refused, as every other way to change it is.
  */
 export function portAction(
+	thread: string,
 	row: PortRow,
 	change: PortChange,
 	canRun: boolean,
 	want: "open" | "unpublish",
 ): { kind: "open" | "unpublish"; port: number } | { kind: "none"; why: string } {
 	const port = row.kind === "port" ? row.port.port : row.port;
-	if (change.pending !== null) return { kind: "none", why: `Port ${port} is ${change.pending === "open" ? "opening" : "closing"} already.` };
+	// A preview with no port of its own has no change to wait for.
+	if (port !== undefined && change.pending !== null) return { kind: "none", why: portBusy(thread, port) };
 	if (row.kind === "port") {
 		if (want === "unpublish") return { kind: "none", why: `Port ${row.port.port} has no preview to unpublish.` };
 		if (row.port.service !== null) return { kind: "none", why: `Port ${row.port.port} belongs to the service ${row.port.service}, which has no preview to publish.` };

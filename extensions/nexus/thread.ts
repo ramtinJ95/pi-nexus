@@ -7,6 +7,12 @@ import type { LiveRun, Part, RenderedEntry, Thread, ThreadState, WatchEvent } fr
 /** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
 export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
 
+/**
+ * Why a publish or unpublish of a port waits for none: another one on the same port is running. The Claude Code
+ * Nexus mod says the same.
+ */
+export const portBusy = (thread: string, port: number) => `Port ${port} on ${thread} is already being published or unpublished. Try again when it finishes.`;
+
 /** A failed nexus command, with the kind the CLI reported. */
 export class NexusError extends Error {
 	constructor(readonly kind: ErrorKind, message: string) {

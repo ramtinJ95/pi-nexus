@@ -8,6 +8,8 @@ import { reduce, type ThreadView } from "../extensions/nexus/thread.ts";
 import { asked, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { idA, idle } from "./fixtures.ts";
 
+/** The note a second change of port 8080 gets while one runs, as every entry point says it. */
+const busy = `Port 8080 on ${idA} is already being published or unpublished. Try again when it finishes.`;
 const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", up: "\x1b[A", pageUp: "\x1b[5~", pageDown: "\x1b[6~", ctrlO: "\x0f", ctrlD: "\x04", ctrlU: "\x15" };
 const screens: ThreadScreen[] = [];
 afterEach(() => screens.splice(0).forEach((s) => s.dispose()));
@@ -447,7 +449,7 @@ describe("thread view", () => {
 		expect(s.text()).toContain("● 8080  opening:");
 		s.press("o");
 		expect(s.previewed).toEqual([8080]);
-		expect(s.text()).toContain("Port 8080 is opening already.");
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
 		s.release();
 		await s.settle();
 		// The published port is a preview row now, after web's.
@@ -507,7 +509,7 @@ describe("thread view", () => {
 		expect(s.text()).toContain("● 8080  opening: publishing it and waiting for the node to serve its URL...");
 		await s.type("/open 8080");
 		expect(s.previewed).toEqual([8080]);
-		expect(s.text()).toContain("Port 8080 is opening already.");
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
 		s.release();
 		await s.settle();
 		expect(s.text()).toMatch(/Previews 2\n.*\n.*\n +● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +\/unpublish 8080 closes it\n/);
@@ -549,7 +551,7 @@ describe("thread view", () => {
 		await s.type("/open 8080");
 		expect(s.unpublished).toEqual([8080]);
 		expect(s.previewed).toEqual([]);
-		expect(s.text()).toContain("Port 8080 is closing already.");
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
 		s.release();
 		await s.settle();
 		expect(s.text()).not.toContain("port-8080");

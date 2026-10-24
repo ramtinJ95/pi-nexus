@@ -35,12 +35,13 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 	const notified: [string, string | undefined][] = [];
 	const shown: Shown[] = [];
 	const statuses: (string | undefined)[] = [];
+	const tools: { name: string; execute: (...args: unknown[]) => Promise<unknown> }[] = [];
 	const widgets: [string, ((tui: unknown, theme: unknown) => Component) | undefined][] = [];
 	const handlers = new Map<string, () => void>();
 	let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
 	const pi = {
 		registerEntryRenderer() {},
-		registerTool() {},
+		registerTool: (tool: (typeof tools)[number]) => tools.push(tool),
 		registerCommand: (_name: string, options: { handler: typeof command }) => (command = options.handler),
 		on: (event: string, handler: () => void) => handlers.set(event, handler),
 		appendEntry: (_type: string, note: (typeof notes)[number]) => notes.push(note),
@@ -86,7 +87,8 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 		if (text().trimEnd().split("\n").at(-1)!.startsWith("INSERT")) press("\x1b");
 		press(...input);
 	};
-	return { run: (args: string) => command!(args, ctx), bin: fake.bin, calls: fake.calls, notes, notified, shown, statuses, widgets, until, text, type, press, normal };
+	const tool = (name: string, params: object) => tools.find((t) => t.name === name)!.execute("call-1", params, undefined, undefined, ctx);
+	return { run: (args: string) => command!(args, ctx), tool, bin: fake.bin, calls: fake.calls, notes, notified, shown, statuses, widgets, until, text, type, press, normal };
 }
 
 describe("console", () => {
@@ -150,6 +152,22 @@ describe("console", () => {
 		expect(n.calls()).toContainEqual(["unpreview", "--json", idA, "8080"]);
 		expect(n.text()).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
 		expect(n.text()).not.toContain("port-8080");
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("the console's /unpublish is refused while the model publishes the same port, so the older publish cannot win", async () => {
+		const own = { pylon: "py-1", service: "port-8080", httpsPort: 8445, ready: true, url: "https://firebat.example.ts.net:8445/" };
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, preview: own, unpreview: null }, delayMs: { preview: 800 } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		n.normal("3");
+		const publishing = n.tool("nexus_preview", { thread: idA, port: 8080 });
+		await n.until(() => n.calls().some((c) => c[0] === "preview"), "the model's publish");
+		n.type("/unpublish 8080");
+		const busy = `Port 8080 on ${idA} is already being published or unpublished. Try again when it finishes.`;
+		await n.until(() => n.text().replace(/\s+/g, " ").includes(busy), "the refusal");
+		expect(n.calls().filter((c) => c[0] === "unpreview")).toEqual([]);
+		await publishing;
 		n.shown[0]!.done({ kind: "close" });
 	});
 
