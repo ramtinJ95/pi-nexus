@@ -89,6 +89,8 @@ Leaving a view never aborts the agent. Opening a thread counts as a visit, as on
 | `/nexus session attach <thread>` | Gives this terminal to `nexus attach` until you detach from Herdr. A pi without a terminal to give, as in RPC mode, gets the command to run in one |
 | `/nexus help` | Lists these commands |
 
+Arguments split as a shell splits them: quotes work anywhere in a word, so `--title="two words"` is one title, a backslash outside single quotes escapes the next character, and a quote left open is refused. A message, the text after `send <thread>` or `new <project>`, is kept as typed, apostrophes and all.
+
 A thread is its ID, such as `th-0123456789ab`, or any unique prefix of it, with or without `th-`. Tab completes command names, the thread IDs last listed, after `project`, `all`, `add` and the projects those threads are on, and after `session`, `open`, `close` and `attach`.
 
 Conversation text appears in the chat as Nexus notes. Pi stores the notes in the session but never sends them to its model. A collapsed note shows its last 16 lines, and `ctrl+o` expands it.

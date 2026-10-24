@@ -59,10 +59,43 @@ const sessionCommands = ["open", "close", "attach"];
 interface Token {
 	value: string;
 	start: number;
+	/** The token holds a quote it does not close, so it runs to the end of the input. */
+	open?: true;
 }
 
+/**
+ * `input` split into words as a shell splits them, so a title can hold spaces: at whitespace outside quotes, a quote
+ * anywhere in a word quoting up to its close (`--title="two words"`), and a backslash outside single quotes taking the
+ * next character as it is. In double quotes only `\"` and `\\` escape. A quote left open makes the last token open.
+ */
 function lex(input: string): Token[] {
-	return [...input.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => ({ value: m[1] ?? m[2] ?? m[3]!, start: m.index }));
+	const tokens: Token[] = [];
+	// Set in add, which flow analysis does not follow into.
+	let token = null as Token | null;
+	let quote: '"' | "'" | null = null;
+	const add = (start: number, text: string) => {
+		token ??= { value: "", start };
+		token.value += text;
+	};
+	for (let at = 0; at < input.length; at++) {
+		const char = input[at]!;
+		if (quote) {
+			if (char === quote) quote = null;
+			else if (char === "\\" && quote === '"' && (input[at + 1] === '"' || input[at + 1] === "\\")) add(at, input[++at]!);
+			else add(at, char);
+		} else if (/\s/.test(char)) {
+			if (token) tokens.push(token);
+			token = null;
+		} else if (char === '"' || char === "'") {
+			quote = char;
+			add(at, "");
+		} else if (char === "\\" && at + 1 < input.length) {
+			add(at, input[at + 1]!);
+			at++;
+		} else add(at, char);
+	}
+	if (token) tokens.push(quote ? { ...token, open: true } : token);
+	return tokens;
 }
 
 /** Everything from `token` on as typed, without the quotes around it when it is one quoted token. */
@@ -77,6 +110,12 @@ const invalid = (problem: string) => new NexusError("invalid", `${problem}\n${us
 export function parseCommand(input: string): NexusCommand {
 	const tokens = lex(input);
 	const [name, ...args] = tokens.map((t) => t.value);
+	/** Refuses a quote left open before token `end`, where a message as typed would start. */
+	const closedBefore = (end: number) => {
+		const open = tokens.findIndex((t) => t.open);
+		if (open !== -1 && open < end) throw invalid(`${open === 0 ? "/nexus" : name} has a quote it does not close`);
+	};
+	if (name !== "new" && name !== "send") closedBefore(tokens.length);
 	const arg = (i: number, what: string) => {
 		const value = args[i];
 		if (value === undefined) throw invalid(`${name} needs ${what}`);
@@ -103,11 +142,13 @@ export function parseCommand(input: string): NexusCommand {
 				title = args[1].slice("--title=".length);
 				at = 3;
 			}
+			closedBefore(at);
 			const first = tokens[at];
 			if (first === undefined) return { name: "start", project, ...(title === undefined ? {} : { title }) };
 			return { name, project, ...(title === undefined ? {} : { title }), message: rest(input, first) };
 		}
 		case "send": {
+			closedBefore(2);
 			const thread = arg(0, "a thread");
 			if (tokens[2] === undefined) throw invalid("send needs text");
 			return { name, thread, text: rest(input, tokens[2]) };
