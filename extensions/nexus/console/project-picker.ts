@@ -1,12 +1,13 @@
 /**
  * The project picker, which `p` opens from the thread picker or a thread: every project, each project with its repo
- * URL, and a new one. Choosing one scopes the thread picker, the strip and the status line to it. pi's selector look,
- * and the vim keys of the console's other menus.
+ * URL or `scratch`, and a new one. Choosing one scopes the thread picker, the strip and the status line to it. pi's
+ * selector look, and the vim keys of the console's other menus.
  */
 import { DynamicBorder, rawKeyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Project } from "../contract.ts";
 import { KeyReader, type Binding } from "./keys.ts";
+import { repoOf } from "./model.ts";
 
 /** `scope` shows `project`, or every project for null; `new` opens the form that adds one. */
 export type ProjectEnd = { kind: "scope"; project: string | null } | { kind: "new" } | { kind: "cancel" };
@@ -100,7 +101,7 @@ export class ProjectPicker implements Component, Focusable {
 			const prefix = selected ? t.fg("accent", "→ ") : "  ";
 			const label = row.kind === "new" ? t.fg(selected ? "accent" : "muted", name(row)) : selected ? t.fg("accent", name(row)) : name(row);
 			const current = (row.kind === "all" && this.current === null) || (row.kind === "project" && row.project.id === this.current);
-			const detail = [row.kind === "project" ? row.project.repoUrl : "", current ? "current" : ""].filter(Boolean).join("  ");
+			const detail = [row.kind === "project" ? repoOf(row.project) : "", current ? "current" : ""].filter(Boolean).join("  ");
 			lines.push(` ${prefix}${label}${detail === "" ? "" : `${" ".repeat(column - visibleWidth(name(row)))}${t.fg("dim", detail)}`}`);
 			if (row.kind === "all" && this.projects === undefined && this.error === undefined) lines.push(`   ${t.fg("muted", "Reading the projects...")}`);
 		}

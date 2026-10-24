@@ -267,7 +267,8 @@ class NexusSession {
 				const { name: _name, ...add } = command;
 				const project = await addProject(nexus, add, signal);
 				this.scope.set(project.id);
-				return ctx.ui.notify(`Added the project ${project.id} (${project.repoUrl}) on ${project.defaultNode}. Nexus shows its threads.`, "info");
+				const added = project.repoUrl === null ? `the scratch project ${project.id}` : `the project ${project.id} (${project.repoUrl})`;
+				return ctx.ui.notify(`Added ${added} on ${project.defaultNode}. Nexus shows its threads.`, "info");
 			}
 			case "session-open": {
 				const thread = await id(command.thread);

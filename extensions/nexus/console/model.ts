@@ -589,7 +589,11 @@ export function startArgs(form: StartForm): { project: string; title?: string; m
 	return { project: form.project, ...Object.fromEntries(Object.entries(optional).filter(([, v]) => v !== undefined)) };
 }
 
+/** A project's repo URL, or `scratch` for a scratch project, as the dashboard and `nexus projects` list it. */
+export const repoOf = (project: Project) => project.repoUrl ?? "scratch";
+
 export function startHint(project: Project | undefined, form: StartForm): string {
 	if (project === undefined) return "";
-	return `Boots a pylon on ${form.node.trim() || project.defaultNode} and checks out ${form.branch.trim() || project.defaultBranch}.`;
+	const repo = project.repoUrl === null ? "starts an empty repository on" : "checks out";
+	return `Boots a pylon on ${form.node.trim() || project.defaultNode} and ${repo} ${form.branch.trim() || project.defaultBranch}.`;
 }
