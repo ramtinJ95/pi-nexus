@@ -15,6 +15,7 @@ function heldNexus() {
 	const runs: { args: string[]; answer(value: unknown): void }[] = [];
 	let onEvent: (event: WatchEvent) => void = () => {};
 	const nexus: Nexus = {
+		bin: "nexus",
 		run: (args) => new Promise((resolve) => runs.push({ args: [...args], answer: resolve })),
 		watch(_thread, handler, signal) {
 			onEvent = handler;

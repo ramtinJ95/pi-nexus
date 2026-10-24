@@ -92,6 +92,8 @@ export function sessionLines(
 	changes: SessionChanges,
 	selected: number,
 	width: number,
+	/** The CLI binary the attach command names. */
+	cli: string,
 ): { lines: string[]; rows: [first: number, last: number][] } {
 	if (detail === undefined) return { lines: loading(theme), rows: [] };
 	const w = writer(theme, width);
@@ -117,7 +119,7 @@ export function sessionLines(
 	}
 
 	w.heading("Attach from this Mac");
-	lines.push(`   ${t.fg("mdCode", attachCommand(detail.thread.id))}`);
+	lines.push(`   ${t.fg("mdCode", attachCommand(cli, detail.thread.id))}`);
 	w.wrapped("enter runs it here, and y copies it. Each session is a workspace in the pylon's Herdr: pick one there, and detach from Herdr to come back.", "dim");
 	w.wrapped(sshHint, "dim");
 	return { lines: w.done(), rows };

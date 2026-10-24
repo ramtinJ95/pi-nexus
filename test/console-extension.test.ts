@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { addProject, createNexus, listProjects, listThreads, openSession, showThread } from "../extensions/nexus/cli.ts";
-import { sshHint } from "../extensions/nexus/console/model.ts";
+import { shellQuote, sshHint } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
 import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
@@ -247,7 +247,7 @@ describe("console", () => {
 		n.press("\r");
 		await n.until(() => n.text().includes("Detached from the pylon's sessions."), "the attach to end");
 		expect(n.calls()).toContainEqual(["attach", "--json", idA]);
-		expect(tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with nexus attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
+		expect(tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with ${shellQuote(n.bin)} attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
 		n.shown[0]!.done({ kind: "close" });
 	});
 
@@ -266,7 +266,7 @@ describe("console", () => {
 		const n = load(scenario);
 		await n.run(`session attach ${idA}`);
 		expect(n.calls()).toContainEqual(["attach", "--json", idA]);
-		expect(n.shown[0]!.tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with nexus attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
+		expect(n.shown[0]!.tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with ${shellQuote(n.bin)} attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
 		expect(n.notified).toContainEqual([`Detached from the sessions of ${idA}.`, "info"]);
 		const old = load({ ...scenario, fail: { attach: { exit: 64, kind: "invalid", error: "unknown command attach" } } });
 		await old.run(`session attach ${idA}`);
@@ -277,7 +277,7 @@ describe("console", () => {
 		expect(stopped.notified).toContainEqual(["nexus: nexus attach stopped on SIGINT", "error"]);
 		const rpc = load(scenario, { custom: false });
 		await rpc.run(`session attach ${idA}`);
-		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  nexus attach ${idA}\n\n${sshHint}` }]);
+		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${shellQuote(rpc.bin)} attach ${idA}\n\n${sshHint}` }]);
 	});
 
 	test("/nexus opens on the working thread with the picker under it, so h goes back to the picker and q closes", async () => {

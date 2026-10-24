@@ -9,6 +9,8 @@ import { NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thr
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
+	/** The CLI binary this runs, which a command a person runs themselves names too. */
+	readonly bin: string;
 	/** Runs `nexus <command> --json <args>` and returns what it printed. A command of two words, such as `project add`, is one item. */
 	run(args: readonly string[], signal?: AbortSignal): Promise<unknown>;
 	/** Streams `nexus watch <thread> --json` until the thread is deleted or `signal` aborts. */
@@ -49,6 +51,7 @@ const attachStderrKept = 8_192;
 
 export function createNexus(bin: string = defaultBin()): Nexus {
 	return {
+		bin,
 		run(args, signal) {
 			return new Promise((resolve, reject) => {
 				// --json goes before the arguments, since an argument after `--` takes everything that follows as text.

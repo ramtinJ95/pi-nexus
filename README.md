@@ -16,7 +16,7 @@ pi install npm:@ramtinj95/pi-nexus
 
 Run `/reload` or restart Pi after installation. Pi packages execute with full system access, so review extensions before installing them.
 
-The extension runs `nexus` from `PATH`. Set `NEXUS_BIN` to run another binary.
+The extension runs `nexus` from `PATH`. Set `NEXUS_BIN` to run another binary, which the attach command it shows and copies names too.
 
 ## The console
 

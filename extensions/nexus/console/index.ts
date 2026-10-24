@@ -113,7 +113,7 @@ async function attached(nexus: Nexus, tui: TUI, thread: string): Promise<void> {
 	process.on("SIGINT", ignore);
 	tui.stop();
 	try {
-		tui.terminal.write(`Attaching to the sessions of ${thread} with ${attachCommand(thread)}. Detach from Herdr to come back to pi.\n`);
+		tui.terminal.write(`Attaching to the sessions of ${thread} with ${attachCommand(nexus.bin, thread)}. Detach from Herdr to come back to pi.\n`);
 		await attachThread(nexus, thread);
 	} finally {
 		process.off("SIGINT", ignore);
@@ -421,6 +421,7 @@ export class Console {
 			keybindings,
 			display: this.display(cwd),
 			thread,
+			cli: nexus.bin,
 			draft: this.drafts.get(thread),
 			done: (end) => {
 				const draft = screen.draft;

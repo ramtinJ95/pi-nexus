@@ -293,6 +293,8 @@ export interface ScreenOptions {
 	keybindings: KeybindingsManager;
 	display: Display;
 	thread: string;
+	/** The CLI binary the attach command shown and copied names. */
+	cli: string;
 	actions: ScreenActions;
 	done(end: ScreenEnd): void;
 	/** What the composer held when the thread was last left. */
@@ -981,7 +983,7 @@ export class ThreadScreen implements Component, Focusable {
 	/** y: the selected preview's link in Ports, the attach command in Details, nexus attach in Sessions. */
 	private copySelected(): void {
 		if (this.tab === "details" && this.detail) return void this.copy(this.detail.attach);
-		if (this.tab === "sessions") return void this.copy(attachCommand(this.options.thread));
+		if (this.tab === "sessions") return void this.copy(attachCommand(this.options.cli, this.options.thread));
 		const row = this.tab === "ports" ? this.selectedRow() : undefined;
 		if (row?.kind !== "preview") return this.say("y copies a preview's link selected in Ports, the attach command in Details, or nexus attach in Sessions.");
 		void this.copy(row.preview.url);
@@ -1103,7 +1105,7 @@ export class ThreadScreen implements Component, Focusable {
 				const { lines, rows } =
 					tab === "ports"
 						? portLines(this.theme, this.detail, this.shown(), this.portChanges, this.selected.ports, width)
-						: sessionLines(this.theme, this.detail, this.sessions(), this.sessionChanges, this.selected.sessions, width);
+						: sessionLines(this.theme, this.detail, this.sessions(), this.sessionChanges, this.selected.sessions, width, this.options.cli);
 				const focus = rows[this.selected[tab]];
 				return { lines: ["", ...lines], ...(focus ? { focus: [focus[0] + 1, focus[1] + 1] as [number, number] } : {}) };
 			}

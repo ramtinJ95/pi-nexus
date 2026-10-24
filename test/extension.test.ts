@@ -263,6 +263,7 @@ describe("the status poll", () => {
 	function held() {
 		const runs: { args: readonly string[]; signal: AbortSignal | undefined; answer: () => void }[] = [];
 		const nexus: Nexus = {
+			bin: "nexus",
 			run: (args, signal) =>
 				new Promise((resolve, reject) => {
 					runs.push({ args, signal, answer: () => resolve(args[0] === "threads" ? threads : null) });
