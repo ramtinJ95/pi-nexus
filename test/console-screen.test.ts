@@ -370,6 +370,20 @@ describe("thread view", () => {
 		expect(s.text()).not.toContain("Watch again");
 	});
 
+	test("a deleted thread's ended watch keeps the delete's note and offers no watch again", async () => {
+		const s = open();
+		s.press("m", ..."jjjjjj", keys.enter, "j", keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["delete"]);
+		// The watch reports the thread deleted, then ends, as Nexus ends a deleted thread's watch.
+		s.screen.setView({ entries, state: { ...idle, status: "deleted" } });
+		s.screen.watchEnded(undefined);
+		expect(s.text()).toContain("Deleted the thread.");
+		expect(s.text()).not.toContain("The watch ended");
+		s.press("m");
+		expect(s.text()).not.toContain("Watch again");
+	});
+
 	test("y in Details copies the attach command", async () => {
 		const s = open();
 		s.press("y");

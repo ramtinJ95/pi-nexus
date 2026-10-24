@@ -425,8 +425,12 @@ export class ThreadScreen implements Component, Focusable {
 		else if (this.status && run.kind === "working") this.status.component.setMessage(workingMessage(run, this.now(), state?.status === "archived"));
 	}
 
-	/** The watch ended, with why when it failed. */
+	/**
+	 * The watch ended, with why when it failed. Nexus ends a deleted thread's watch, which has nothing left to follow,
+	 * so that end says nothing and the delete's own note stays.
+	 */
 	watchEnded(why: string | undefined): void {
+		if ((this.view.state?.status ?? this.detail?.thread.status) === "deleted") return;
 		this.unwatched = true;
 		this.say(`The watch ended${why === undefined ? "" : `: ${why}`}. m, then Watch again, follows the thread again.`, why !== undefined);
 	}
