@@ -494,7 +494,7 @@ describe("console", () => {
 			await n.until(() => n.shown.length === 3 && n.text().includes("Add a project") && n.text().includes("[firebat]"), "the form");
 			n.press(..."fork", "\t", ..."git@github.com:me/fork.git", "\t", "\t", "\r");
 			await n.until(() => n.shown.length === 4 && n.text().includes("Nexus threads · fork"), "the picker on the new project");
-			expect(n.calls()).toContainEqual(["project", "add", "--json", "fork", "git@github.com:me/fork.git", "--node=firebat", "--branch=main"]);
+			expect(n.calls()).toContainEqual(["project", "add", "--json", "--node=firebat", "--branch=main", "--", "fork", "git@github.com:me/fork.git"]);
 			expect(n.text()).toMatch(/fork 0\n/);
 			expect(settings.writes).toEqual([{ project: "fork" }]);
 			n.press("q");
@@ -595,12 +595,12 @@ describe("console", () => {
 			const settings = memorySettings();
 			const n = load(scoped, { settings });
 			await n.run("project add fork git@github.com:me/fork.git --node firebat");
-			expect(n.calls()).toContainEqual(["project", "add", "--json", "fork", "git@github.com:me/fork.git", "--node=firebat"]);
+			expect(n.calls()).toContainEqual(["project", "add", "--json", "--node=firebat", "--", "fork", "git@github.com:me/fork.git"]);
 			expect(n.notified.at(-1)).toEqual(["Added the project fork (git@github.com:me/fork.git) on firebat. Nexus shows its threads.", "info"]);
 			expect(settings.writes).toEqual([{ project: "fork" }]);
 			const f = load(addFails(5, "conflict", "project spoon already exists"), { settings });
 			await f.run("project add spoon git@example.com:spoon --node firebat --branch trunk");
-			expect(f.calls()).toContainEqual(["project", "add", "--json", "spoon", "git@example.com:spoon", "--node=firebat", "--branch=trunk"]);
+			expect(f.calls()).toContainEqual(["project", "add", "--json", "--node=firebat", "--branch=trunk", "--", "spoon", "git@example.com:spoon"]);
 			expect(f.notified.at(-1)).toEqual(["nexus: project spoon already exists", "error"]);
 			expect(settings.writes).toEqual([{ project: "fork" }]);
 		});
@@ -701,6 +701,14 @@ describe("the contract", () => {
 		expect(await listProjects(nexus({ responses: { projects: [added] } }))).toEqual([added]);
 		const { defaultNode: _, ...bare } = added;
 		await expect(addProject(nexus({ responses: { project: bare } }), add)).rejects.toThrow("nexus project add has no defaultNode, which pi-nexus needs");
+	});
+
+	test("a project add passes its ID and repo URL after --, so neither reads as a flag", async () => {
+		const fake = fakeNexus({});
+		cleanups.push(fake.cleanup);
+		const add = { id: "spoon", repoUrl: "--branch=trunk", node: "firebat" };
+		expect(await addProject(createNexus(fake.bin), add)).toMatchObject({ id: "spoon", repoUrl: "--branch=trunk", defaultBranch: "main", defaultNode: "firebat" });
+		expect(fake.calls()).toEqual([["project", "add", "--json", "--node=firebat", "--", "spoon", "--branch=trunk"]]);
 	});
 
 	test("a detail needs its pylon's retry refusal, which may be null", async () => {
