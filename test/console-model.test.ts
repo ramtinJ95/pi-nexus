@@ -234,6 +234,8 @@ describe("previews and starting", () => {
 		expect(startArgs({ title: "", project: "nexus", node: "nuc", branch: "dev", message: "go" })).toEqual({ project: "nexus", message: "go", node: "nuc", branch: "dev" });
 		expect(startHint(project, { title: "", project: "nexus", node: "", branch: "", message: "" })).toBe("Boots a pylon on firebat and checks out main.");
 		expect(startHint(project, { title: "", project: "nexus", node: "nuc", branch: "dev", message: "" })).toBe("Boots a pylon on nuc and checks out dev.");
+		const scratch = { ...project, repoUrl: null };
+		expect(startHint(scratch, { title: "", project: "nexus", node: "", branch: "dev", message: "" })).toBe("Boots a pylon on firebat and starts an empty repository on dev.");
 	});
 });
 
