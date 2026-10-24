@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
 import { createNexus, type Nexus } from "../extensions/nexus/cli.ts";
-import { memoryStores } from "./console-fixture.ts";
+import { detail, memoryStores } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, idB, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -63,6 +63,43 @@ describe("/nexus", () => {
 		const old = load({ responses: { threads }, fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
 		await old.run(`unpublish ${idA} 8080`);
 		expect(old.notified).toContainEqual(["nexus: nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)", "error"]);
+	});
+
+	test("session open runs nexus session open with its flags, says so, and an older CLI says to update", async () => {
+		const opened = { herdrPane: "%7", harness: "pi", title: "log in" };
+		const n = load({ responses: { threads, "session open": opened } });
+		await n.run('session open 0123456789ab --harness pi --title "log in"');
+		expect(n.calls()).toContainEqual(["session", "open", "--json", "--harness=pi", "--title=log in", "--", idA]);
+		expect(n.notified).toEqual([
+			[`Opening pi "log in" in ${idA}. Its agent can take a minute to start.`, "info"],
+			[`Opened pi "log in" in pane %7 of ${idA}. /nexus session attach ${idA} attaches to it.`, "info"],
+		]);
+		const old = load({ responses: { threads }, fail: { "session open": { exit: 64, kind: "invalid", error: "unknown command session" } } });
+		await old.run(`session open ${idA}`);
+		expect(old.calls()).toContainEqual(["session", "open", "--json", "--", idA]);
+		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session open command: opening a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+	});
+
+	test("session close closes the pane given, or asks which with Keep them all first", async () => {
+		const n = load({ responses: { threads, "session close": null } });
+		await n.run(`session close ${idA} %3`);
+		expect(n.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%3"]);
+		expect(n.notified).toEqual([[`Closed pane %3 of ${idA}.`, "info"]]);
+		const sessions = [{ ...detail.sessions[0]!, title: "review" }, { harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: null }];
+		const asking = load({ responses: { threads, show: { ...detail, sessions }, "session close": null } }, { answer: "Claude Code in pane %5, idle" });
+		await asking.run(`session close ${idA}`);
+		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? Its agent ends.`, options: ["Keep them all", 'pi "review" in pane %3, working', "Claude Code in pane %5, idle"] }]);
+		expect(asking.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%5"]);
+		const kept = load({ responses: { threads, show: { ...detail, sessions } } }, { answer: undefined });
+		await kept.run(`session close ${idA}`);
+		expect(kept.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(kept.notified).toEqual([[`Kept the sessions of ${idA}.`, "info"]]);
+		const none = load({ responses: { threads, show: { ...detail, sessions: [] } } });
+		await none.run(`session close ${idA}`);
+		expect(none.notified).toEqual([[`${idA} has no sessions.`, "info"]]);
+		const old = load({ responses: { threads }, fail: { "session close": { exit: 64, kind: "invalid", error: "unknown command session" } } });
+		await old.run(`session close ${idA} %3`);
+		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session close command: closing a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
 	});
 
 	test("a port being published or unpublished refuses a second change from any entry point, without queueing it", async () => {
@@ -232,6 +269,7 @@ describe("the status poll", () => {
 					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
 				}),
 			watch: async () => {},
+			attach: async () => {},
 		};
 		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
 		let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;

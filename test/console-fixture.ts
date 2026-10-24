@@ -87,11 +87,20 @@ export const keybindings = () => new KeybindingsManager() as unknown as Keybindi
 
 export const display = (): Display => ({ outputPad: 1, hideThinkingBlock: false, editorPaddingX: 0, markdownTheme: getMarkdownTheme() });
 
-/** A terminal of `rows` lines that counts its render requests. */
+/** A terminal of `rows` lines that counts its render requests, and records when it stops, starts and is written. */
 export function fakeTui(rows = 40, columns = 100) {
-	const tui = { terminal: { rows, columns }, renders: 0, requestRender() {
-		tui.renders++;
-	} };
+	const events: string[] = [];
+	const tui = {
+		terminal: { rows, columns, write: (data: string) => void events.push(`write ${data}`) },
+		renders: 0,
+		events,
+		requestRender(force?: boolean) {
+			tui.renders++;
+			if (force) events.push("redraw");
+		},
+		stop: () => void events.push("stop"),
+		start: () => void events.push("start"),
+	};
 	return tui as typeof tui & TUI;
 }
 

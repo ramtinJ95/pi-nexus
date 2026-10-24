@@ -20,6 +20,7 @@ function heldNexus() {
 			onEvent = handler;
 			return new Promise((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
 		},
+		attach: async () => {},
 	};
 	const of = (command: string) => runs.filter((r) => r.args[0] === command);
 	return { nexus, runs, of, emit: (event: WatchEvent) => onEvent(event) };

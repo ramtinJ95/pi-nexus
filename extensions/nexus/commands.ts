@@ -1,5 +1,5 @@
 /** The arguments of `/nexus`, parsed into one command. */
-import type { Thread } from "./contract.ts";
+import { harnesses, type Thread } from "./contract.ts";
 import { NexusError } from "./thread.ts";
 
 /** Thread actions that map one to one onto a nexus CLI command. */
@@ -26,6 +26,10 @@ export type NexusCommand =
 	/** `project` undefined shows the scope, and null is every project. */
 	| { name: "scope"; project?: string | null }
 	| { name: "add-project"; id: string; repoUrl: string; node: string; branch?: string }
+	| { name: "session-open"; thread: string; harness?: string; title?: string }
+	/** Without `pane`, it asks which of the thread's sessions to close. */
+	| { name: "session-close"; thread: string; pane?: string }
+	| { name: "attach"; thread: string }
 	| { name: Action; thread: string }
 	| { name: "help" };
 
@@ -44,9 +48,13 @@ export const usage = `/nexus                              the working thread ove
 /nexus strip on|off                  the threads that need you, have news or work, above the editor
 /nexus project [id|all]              which project's threads show, or the one shown
 /nexus project add <id> <repo-url> --node <node> [--branch <branch>]
+/nexus session open <thread> [--harness claude-code|pi|shell] [--title T]
+/nexus session close <thread> [pane]  without a pane, asks which
+/nexus session attach <thread>       this terminal on the pylon's sessions, until you detach
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
-const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", "strip", "project", ...Object.keys(actions), "help"];
+const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", "strip", "project", "session", ...Object.keys(actions), "help"];
+const sessionCommands = ["open", "close", "attach"];
 
 interface Token {
 	value: string;
@@ -122,6 +130,8 @@ export function parseCommand(input: string): NexusCommand {
 			if (args[0] === "add") return addProject(args.slice(1));
 			if (args.length > 1) throw invalid("project takes one argument, or add");
 			return args[0] === undefined ? { name: "scope" } : { name: "scope", project: args[0] === "all" ? null : args[0] };
+		case "session":
+			return session(args);
 		case "help":
 			return { name };
 		case "open":
@@ -136,10 +146,10 @@ export function parseCommand(input: string): NexusCommand {
 	}
 }
 
-/** `project add`'s arguments: an ID and a repo URL, and --node and --branch, as `--flag value` or `--flag=value`. */
-function addProject(args: readonly string[]): NexusCommand {
+/** `command`'s arguments, and its `allowed` flags, each as `--flag value` or `--flag=value`. */
+function flagged<F extends string>(command: string, args: readonly string[], allowed: readonly [F, F]): { positional: string[]; flags: Partial<Record<F, string>> } {
 	const positional: string[] = [];
-	const flags: { node?: string; branch?: string } = {};
+	const flags: Partial<Record<F, string>> = {};
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i]!;
 		if (!arg.startsWith("--")) {
@@ -147,18 +157,54 @@ function addProject(args: readonly string[]): NexusCommand {
 			continue;
 		}
 		const [flag, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
-		if (flag !== "node" && flag !== "branch") throw invalid(`project add takes only --node and --branch, got --${flag}`);
+		if (!allowed.includes(flag as F)) throw invalid(`${command} takes only --${allowed[0]} and --${allowed[1]}, got --${flag}`);
 		const value = inline ?? args[++i];
-		if (value === undefined || value === "") throw invalid(`project add needs a ${flag} after --${flag}`);
-		flags[flag] = value;
+		if (value === undefined || value === "") throw invalid(`${command} needs a ${flag} after --${flag}`);
+		flags[flag as F] = value;
 	}
+	return { positional, flags };
+}
+
+/** `project add`'s arguments: an ID and a repo URL, and --node and --branch. */
+function addProject(args: readonly string[]): NexusCommand {
+	const { positional, flags } = flagged("project add", args, ["node", "branch"]);
 	if (positional.length !== 2) throw invalid("project add needs an ID and a repo URL");
 	if (flags.node === undefined) throw invalid("project add needs --node <node>");
 	const [id, repoUrl] = positional as [string, string];
 	return { name: "add-project", id, repoUrl, node: flags.node, ...(flags.branch === undefined ? {} : { branch: flags.branch }) };
 }
 
+/** `session open|close|attach` and their arguments. */
+function session([command, ...args]: readonly string[]): NexusCommand {
+	switch (command) {
+		case "open": {
+			const { positional, flags } = flagged("session open", args, ["harness", "title"]);
+			if (positional.length !== 1) throw invalid("session open needs a thread");
+			if (flags.harness !== undefined && !(harnesses as readonly string[]).includes(flags.harness)) {
+				throw invalid(`session open needs a harness of ${harnesses.join(", ")}, got ${flags.harness}`);
+			}
+			return { name: "session-open", thread: positional[0]!, ...flags };
+		}
+		case "close":
+			if (args.length === 0 || args.length > 2) throw invalid("session close needs a thread, and may name a pane");
+			return { name: "session-close", thread: args[0]!, ...(args[1] === undefined ? {} : { pane: args[1] }) };
+		case "attach":
+			if (args.length !== 1) throw invalid("session attach needs a thread");
+			return { name: "attach", thread: args[0]! };
+		default:
+			throw invalid(command === undefined ? "session needs open, close or attach" : `session has no command ${command}`);
+	}
+}
+
 const takesThread = new Set(["open", "send", "show", "follow", "unfollow", "unpublish", ...Object.keys(actions)]);
+
+/** Completes `partial` as a thread ID from `threads`, after `before`. */
+function threadItems(before: string, partial: string, threads: readonly Thread[]) {
+	const items = threads
+		.filter((t) => t.id.startsWith(partial) || t.id.startsWith(`th-${partial}`))
+		.map((t) => ({ value: `${before} ${t.id}`, label: t.id, description: `${t.status} ${t.project}: ${t.title}` }));
+	return items.length > 0 ? items : null;
+}
 
 /** Completes the command name, then a thread ID from the threads last listed, or a project they are on. */
 export function complete(prefix: string, threads: readonly Thread[]): { value: string; label: string; description?: string }[] | null {
@@ -169,14 +215,17 @@ export function complete(prefix: string, threads: readonly Thread[]): { value: s
 	}
 	const name = prefix.slice(0, space);
 	const partial = prefix.slice(space + 1);
+	if (name === "session") {
+		const [command = "", ...more] = partial.split(" ");
+		if (more.length === 1 && sessionCommands.includes(command)) return threadItems(`session ${command}`, more[0]!, threads);
+		if (more.length > 0) return null;
+		const items = sessionCommands.filter((c) => c.startsWith(command)).map((c) => ({ value: `session ${c}`, label: c }));
+		return items.length > 0 ? items : null;
+	}
 	if (partial.includes(" ")) return null;
 	if (name === "project") {
 		const items = ["all", "add", ...new Set(threads.map((t) => t.project))].filter((p) => p.startsWith(partial)).map((p) => ({ value: `project ${p}`, label: p }));
 		return items.length > 0 ? items : null;
 	}
-	if (!takesThread.has(name)) return null;
-	const items = threads
-		.filter((t) => t.id.startsWith(partial) || t.id.startsWith(`th-${partial}`))
-		.map((t) => ({ value: `${name} ${t.id}`, label: t.id, description: `${t.status} ${t.project}: ${t.title}` }));
-	return items.length > 0 ? items : null;
+	return takesThread.has(name) ? threadItems(name, partial, threads) : null;
 }

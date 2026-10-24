@@ -3,9 +3,9 @@
  * editor with the run's status in its top border as pi draws it, queued messages sit above it as pi's do, and a
  * footer below it names the thread and its pylon. It fills the screen as an overlay and scrolls by itself.
  *
- * It reads keys as vim does. Normal mode, where the view opens, moves through the Conversation, Details and Ports
- * views with vim's keys and pi's arrows; insert mode gives every key to the composer until Esc. The hint line under
- * the footer names the mode, and the composer shows its cursor and pi's border colour only in insert mode.
+ * It reads keys as vim does. Normal mode, where the view opens, moves through the Conversation, Details, Ports and
+ * Sessions views with vim's keys and pi's arrows; insert mode gives every key to the composer until Esc. The hint
+ * line under the footer names the mode, and the composer shows its cursor and pi's border colour only in insert mode.
  */
 import { CustomEditor, getSelectListTheme, rawKeyHint, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -23,13 +23,14 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { Action } from "../commands.ts";
-import type { NodeSummary, Preview, ThreadDetail } from "../contract.ts";
+import type { NodeSummary, OpenedSession, Preview, ThreadDetail } from "../contract.ts";
 import { portBusy, type ThreadView } from "../thread.ts";
-import { detailLines, portLines } from "./inspector.ts";
+import { detailLines, portLines, sessionLines } from "./inspector.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
 import {
 	ago,
 	archivedText,
+	attachCommand,
 	badge,
 	blocks,
 	composerOf,
@@ -48,7 +49,12 @@ import {
 	noChange,
 	shownPorts,
 	type PortChange,
+	noSessionChanges,
+	sessionName,
+	settleSessions,
+	shownSessions,
 } from "./model.ts";
+import { SessionForm } from "./session-form.ts";
 import { Transcript, type Display } from "./transcript.ts";
 
 export interface ScreenActions {
@@ -59,6 +65,12 @@ export interface ScreenActions {
 	preview(port: number): Promise<Preview>;
 	/** Unpublishes the preview of `port`. */
 	unpublish(port: number): Promise<void>;
+	/** Opens a session in the pylon, and resolves once its agent is ready or waits for its human. */
+	openSession(harness: string, title: string | undefined): Promise<OpenedSession>;
+	/** Closes a session's pane, which ends its agent. */
+	closeSession(pane: string): Promise<void>;
+	/** Gives the terminal to `nexus attach` until the person detaches from Herdr, then takes it back. */
+	attach(): Promise<void>;
 	/** Reads the details again, which come back through setDetail. */
 	refresh(): void;
 	/** Follows the thread again after its watch ended, which then reports through watchEnded again. */
@@ -86,7 +98,9 @@ export const screenCommands: readonly { name: string; description: string; actio
 	{ name: "open", description: "publish a port of the pylon as a preview and link it" },
 	{ name: "unpublish", description: "close a port's preview, so its link stops answering" },
 	{ name: "copy", description: "copy a preview's link, by its port or its service" },
-	{ name: "info", description: "show or hide the pylon, outputs and sessions" },
+	{ name: "session", description: "open a session in the pylon: Claude Code, pi or a shell" },
+	{ name: "attach", description: "attach this terminal to the pylon's sessions, until you detach from Herdr" },
+	{ name: "info", description: "show or hide the pylon and its outputs" },
 	{ name: "close", description: "close the thread view" },
 ];
 
@@ -99,12 +113,16 @@ const done: Readonly<Record<Action, string>> = {
 	delete: "Deleted the thread.",
 };
 
-type Tab = "conversation" | "details" | "ports";
+type Tab = "conversation" | "details" | "ports" | "sessions";
 const tabs: readonly { tab: Tab; label: string }[] = [
 	{ tab: "conversation", label: "Conversation" },
 	{ tab: "details", label: "Details" },
 	{ tab: "ports", label: "Ports" },
+	{ tab: "sessions", label: "Sessions" },
 ];
+/** The views whose rows j and k select, rather than scroll. */
+type Listing = "ports" | "sessions";
+const isListing = (tab: Tab): tab is Listing => tab === "ports" || tab === "sessions";
 
 type Command =
 	| "insert"
@@ -123,7 +141,8 @@ type Command =
 	| "previousTab"
 	| Tab
 	| "activate"
-	| "unpublish"
+	| "remove"
+	| "openSession"
 	| "copy"
 	| "actions"
 	| "refresh"
@@ -140,24 +159,26 @@ type Command =
 const threadKeys: readonly Binding<Command>[] = [
 	{ keys: ["i", "a"], command: "insert", help: "write a message; esc, or enter with nothing written, stops writing" },
 	{ keys: ["/"], command: "slash", help: "type a slash command, such as /open 8080" },
-	{ keys: ["j", "down"], command: "down", help: "scroll down, or the next port" },
-	{ keys: ["k", "up"], command: "up", help: "scroll up, or the previous port" },
+	{ keys: ["j", "down"], command: "down", help: "scroll down, or the next port or session" },
+	{ keys: ["k", "up"], command: "up", help: "scroll up, or the previous port or session" },
 	{ keys: ["d", "ctrl+d"], command: "halfDown", help: "half a page down" },
 	{ keys: ["u", "ctrl+u"], command: "halfUp", help: "half a page up" },
 	{ keys: ["pageDown"], command: "pageDown", help: "a page down" },
 	{ keys: ["pageUp"], command: "pageUp", help: "a page up" },
-	{ keys: ["gg", "home"], command: "top", help: "the top, or the first port" },
-	{ keys: ["G", "ge", "end"], command: "bottom", help: "the end, which then follows the agent, or the last port" },
+	{ keys: ["gg", "home"], command: "top", help: "the top, or the first port or session" },
+	{ keys: ["G", "ge", "end"], command: "bottom", help: "the end, which then follows the agent, or the last port or session" },
 	{ keys: ["h", "left"], command: "left", help: "the view to the left; from the conversation, back where you came from" },
 	{ keys: ["l", "right"], command: "right", help: "the view to the right" },
 	{ keys: ["gt", "tab"], command: "nextTab", help: "the next view, round to the first" },
 	{ keys: ["gT", "shift+tab"], command: "previousTab", help: "the previous view, round to the last" },
 	{ keys: ["1"], command: "conversation", help: "the conversation" },
-	{ keys: ["2"], command: "details", help: "the pylon, outputs, sessions and attach command" },
+	{ keys: ["2"], command: "details", help: "the pylon, outputs and the attach command from a shell in it" },
 	{ keys: ["3"], command: "ports", help: "the previews and ports" },
-	{ keys: ["enter", "o"], command: "activate", help: "publish the selected port" },
-	{ keys: ["x"], command: "unpublish", help: "unpublish the selected port's own preview" },
-	{ keys: ["y"], command: "copy", help: "copy the selected preview's link, or in Details the attach command" },
+	{ keys: ["4"], command: "sessions", help: "the pylon's sessions, to open, attach to and close" },
+	{ keys: ["enter", "o"], command: "activate", help: "publish the selected port, or in Sessions attach this terminal to the pylon's sessions" },
+	{ keys: ["x"], command: "remove", help: "unpublish the selected port's own preview, or close the selected session" },
+	{ keys: ["n"], command: "openSession", help: "open a session in the pylon: Claude Code, pi or a shell" },
+	{ keys: ["y"], command: "copy", help: "copy the selected preview's link, the attach command in Details, or nexus attach in Sessions" },
 	{ keys: ["m", ":"], command: "actions", help: "the thread's actions: abort, retry, archive, delete and more" },
 	{ keys: ["r"], command: "refresh", help: "read the thread's details again" },
 	{ keys: ["t"], command: "threads", help: "the thread picker, to switch threads" },
@@ -176,7 +197,7 @@ const menuKeys: readonly Binding<MenuCommand>[] = [
 ];
 
 /** The actions menu's entries, each shown while it can apply. */
-type MenuEntry = Action | "start-again" | "copy-attach" | "rewatch";
+type MenuEntry = Action | "start-again" | "copy-attach" | "open-session" | "attach" | "rewatch";
 interface MenuState {
 	unwatched: boolean;
 	working: boolean;
@@ -194,6 +215,8 @@ const menuEntries: readonly { entry: MenuEntry; label: string; description: stri
 	{ entry: "archive", label: "Archive", description: "archive the thread, which pauses its pylon", when: (s) => s.status !== "archived" && s.status !== "deleted" },
 	{ entry: "unarchive", label: "Unarchive", description: "bring the thread back", when: (s) => s.status === "archived" },
 	{ entry: "copy-attach", label: "Copy the attach command", description: "to attach from a shell in the pylon", when: (s) => s.loaded },
+	{ entry: "open-session", label: "Open a session", description: "Claude Code, pi or a shell, in the pylon", when: (s) => s.status !== "archived" && s.status !== "deleted" },
+	{ entry: "attach", label: "Attach", description: "this terminal to the pylon's sessions, until you detach from Herdr", when: (s) => s.status !== "archived" && s.status !== "deleted" },
 	{ entry: "delete", label: "Delete", description: "the thread and its pylon, after asking", when: (s) => s.status !== "deleted" },
 ];
 
@@ -295,6 +318,8 @@ export class ThreadScreen implements Component, Focusable {
 	private status: { component: RunStatus; kind: "working" | "retry" } | undefined;
 	private notice: { text: string; error: boolean } | undefined;
 	private menu: Menu | undefined;
+	/** The form that opens a session, in the composer's place while it shows. */
+	private form: SessionForm | undefined;
 	private help = false;
 	/** Whether the watch ended, so the view no longer follows the thread until it is watched again. */
 	private unwatched = false;
@@ -304,14 +329,17 @@ export class ThreadScreen implements Component, Focusable {
 	private tab: Tab = "conversation";
 	/** What the person did to each port from this view, by number. */
 	private readonly portChanges = new Map<number, PortChange>();
+	/** What the person did to the sessions from this view. */
+	private readonly sessionChanges = noSessionChanges();
 	/** Each view's first shown line, and whether it sticks to its end, as the conversation does while the agent writes. */
 	private readonly scrolls: Record<Tab, { top: number; following: boolean }> = {
 		conversation: { top: 0, following: true },
 		details: { top: 0, following: false },
 		ports: { top: 0, following: false },
+		sessions: { top: 0, following: false },
 	};
-	/** The selected row of the Ports view, and whether the next draw scrolls it into sight. */
-	private port = 0;
+	/** The selected row of each view that has rows, and whether the next draw scrolls it into sight. */
+	private readonly selected: Record<Listing, number> = { ports: 0, sessions: 0 };
 	private reveal = false;
 	private height = 1;
 	private _focused = false;
@@ -349,7 +377,8 @@ export class ThreadScreen implements Component, Focusable {
 
 	set focused(value: boolean) {
 		this._focused = value;
-		this.editor.focused = value && this.mode === "insert";
+		this.editor.focused = value && this.mode === "insert" && this.form === undefined;
+		if (this.form) this.form.focused = value;
 	}
 
 	/**
@@ -389,6 +418,7 @@ export class ThreadScreen implements Component, Focusable {
 	setDetail(detail: ThreadDetail, askedAt: number): void {
 		this.detail = detail;
 		this.askedAt = askedAt;
+		settleSessions(this.sessionChanges, detail.sessions, this.now());
 		this.updateStatus();
 		this.tui.requestRender();
 	}
@@ -488,6 +518,10 @@ export class ThreadScreen implements Component, Focusable {
 				return this.unpublishPort(argument);
 			case "copy":
 				return this.copyLink(argument);
+			case "session":
+				return this.openForm();
+			case "attach":
+				return this.attach();
 			default:
 				return this.act(command.action!);
 		}
@@ -630,6 +664,92 @@ export class ThreadScreen implements Component, Focusable {
 		);
 	}
 
+	/** The sessions as shown: the details with what the person confirmed since they were read. */
+	private sessions() {
+		return shownSessions(this.detail?.sessions ?? [], this.sessionChanges);
+	}
+
+	private openForm(): void {
+		const close = () => {
+			this.form = undefined;
+			this.focused = this._focused;
+		};
+		this.form = new SessionForm(
+			this.theme,
+			(harness, title) => {
+				close();
+				this.show("sessions");
+				void this.openSession(harness, title);
+			},
+			close,
+		);
+		this.focused = this._focused;
+		this.tui.requestRender();
+	}
+
+	/** Opens a session, saying so while the CLI waits for its agent, and shows it under Sessions once it opened. */
+	private async openSession(harness: string, title: string | undefined): Promise<void> {
+		const opening = { harness, title };
+		const changes = this.sessionChanges;
+		changes.opening.push(opening);
+		this.say(`Opening ${sessionName(harness, title)}. Its agent can take a minute to start.`);
+		try {
+			const session = await this.options.actions.openSession(harness, title);
+			changes.opened.push({ session, at: this.now() });
+			this.options.actions.refresh();
+			this.say(`Opened ${sessionName(session.harness, session.title)} in pane ${session.herdrPane}. Enter in Sessions, or /attach, attaches this terminal: pick the session's workspace in Herdr.`);
+		} catch (err) {
+			this.say(`The session did not open: ${err instanceof Error ? err.message : String(err)}`, true);
+		} finally {
+			changes.opening.splice(changes.opening.indexOf(opening), 1);
+			this.tui.requestRender();
+		}
+	}
+
+	/** Keep comes first, so the highlighted answer and Esc both keep the session. */
+	private askClose(pane: string, name: string): void {
+		const kept = () => this.say("Kept the session.");
+		this.openMenu(
+			`Close ${name} in pane ${pane}? Its agent ends.`,
+			[
+				{ value: "keep", label: "Keep" },
+				{ value: "close", label: "Close" },
+			],
+			(value) => (value === "close" ? void this.closeSession(pane) : kept()),
+			kept,
+		);
+	}
+
+	private async closeSession(pane: string): Promise<void> {
+		const changes = this.sessionChanges;
+		changes.closing.add(pane);
+		this.say(`Closing pane ${pane}...`);
+		try {
+			await this.options.actions.closeSession(pane);
+			changes.closed.set(pane, this.now());
+			changes.opened = changes.opened.filter((o) => o.session.herdrPane !== pane);
+			this.options.actions.refresh();
+			this.say(`Closed pane ${pane}.`);
+		} catch (err) {
+			this.say(`Pane ${pane} was not closed: ${err instanceof Error ? err.message : String(err)}`, true);
+		} finally {
+			changes.closing.delete(pane);
+			this.tui.requestRender();
+		}
+	}
+
+	/** Attaches this terminal, which the view gets back once the person detaches, and says how that ended. */
+	private async attach(): Promise<void> {
+		try {
+			await this.options.actions.attach();
+			this.say("Detached from the pylon's sessions.");
+		} catch (err) {
+			this.say(`Attaching failed: ${err instanceof Error ? err.message : String(err)}`, true);
+		} finally {
+			this.options.actions.refresh();
+		}
+	}
+
 	private async copyLink(argument: string): Promise<void> {
 		if (argument === "") return this.say("/copy needs a port or a service, such as /copy 5173.", true);
 		const url = this.linkOf(argument);
@@ -697,6 +817,8 @@ export class ThreadScreen implements Component, Focusable {
 				const entry = value as MenuEntry;
 				if (entry === "start-again") return this.startAgain();
 				if (entry === "copy-attach") return void this.copy(this.detail!.attach);
+				if (entry === "open-session") return this.openForm();
+				if (entry === "attach") return void this.attach();
 				if (entry === "delete") return this.askDelete();
 				if (entry === "rewatch") return this.rewatch();
 				void this.act(entry);
@@ -721,6 +843,7 @@ export class ThreadScreen implements Component, Focusable {
 
 	handleInput(data: string): void {
 		if (this.menu) this.menuInput(this.menu, data);
+		else if (this.form) this.form.handleInput(data);
 		else if (this.help) this.help = false;
 		else if (this.mode === "insert") {
 			if (matchesKey(data, "pageUp")) this.scroll(-this.page());
@@ -743,9 +866,9 @@ export class ThreadScreen implements Component, Focusable {
 				this.setMode("insert");
 				return this.editor.handleInput("/");
 			case "down":
-				return this.tab === "ports" ? this.select(this.port + 1) : this.scroll(1);
+				return isListing(this.tab) ? this.select(this.selected[this.tab] + 1) : this.scroll(1);
 			case "up":
-				return this.tab === "ports" ? this.select(this.port - 1) : this.scroll(-1);
+				return isListing(this.tab) ? this.select(this.selected[this.tab] - 1) : this.scroll(-1);
 			case "halfDown":
 				return this.scroll(half);
 			case "halfUp":
@@ -755,11 +878,11 @@ export class ThreadScreen implements Component, Focusable {
 			case "pageUp":
 				return this.scroll(-this.page());
 			case "top":
-				if (this.tab === "ports") return this.select(0);
+				if (isListing(this.tab)) return this.select(0);
 				this.scrolls[this.tab] = { top: 0, following: false };
 				return;
 			case "bottom":
-				if (this.tab === "ports") return this.select(Number.MAX_SAFE_INTEGER);
+				if (isListing(this.tab)) return this.select(Number.MAX_SAFE_INTEGER);
 				this.scrolls[this.tab].following = true;
 				return;
 			case "left":
@@ -775,11 +898,14 @@ export class ThreadScreen implements Component, Focusable {
 			case "conversation":
 			case "details":
 			case "ports":
+			case "sessions":
 				return this.show(command);
 			case "activate":
-				return this.activate("open");
-			case "unpublish":
-				return this.activate("unpublish");
+				return this.tab === "sessions" ? void this.attach() : this.activate("open");
+			case "remove":
+				return this.tab === "sessions" ? this.closeSelected() : this.activate("unpublish");
+			case "openSession":
+				return this.openForm();
 			case "refresh":
 				this.options.actions.refresh();
 				return this.say("Reading the thread's details again...");
@@ -818,14 +944,26 @@ export class ThreadScreen implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
+	private rowCount(tab: Listing): number {
+		return tab === "ports" ? portRows(this.shown()).length : this.sessions().length;
+	}
+
 	private select(row: number): void {
-		const rows = portRows(this.shown()).length;
-		this.port = Math.max(0, Math.min(rows - 1, row));
+		const tab = this.tab as Listing;
+		this.selected[tab] = Math.max(0, Math.min(this.rowCount(tab) - 1, row));
 		this.reveal = true;
 	}
 
 	private selectedRow() {
-		return portRows(this.shown())[this.port];
+		return portRows(this.shown())[this.selected.ports];
+	}
+
+	/** x in Sessions: asks, then closes the selected session. */
+	private closeSelected(): void {
+		const session = this.sessions()[this.selected.sessions];
+		if (session === undefined) return this.say("No session to close. n opens one.");
+		if (this.sessionChanges.closing.has(session.herdrPane)) return this.say(`Pane ${session.herdrPane} is already closing.`);
+		this.askClose(session.herdrPane, sessionName(session.harness, session.title));
 	}
 
 	/** Enter or x on a port row: publishes a port with no preview, or unpublishes a port's own preview. */
@@ -840,11 +978,12 @@ export class ThreadScreen implements Component, Focusable {
 		void (action.kind === "open" ? this.openPort(String(action.port)) : this.unpublishPort(String(action.port)));
 	}
 
-	/** y: the selected preview's link in Ports, the attach command in Details. */
+	/** y: the selected preview's link in Ports, the attach command in Details, nexus attach in Sessions. */
 	private copySelected(): void {
 		if (this.tab === "details" && this.detail) return void this.copy(this.detail.attach);
+		if (this.tab === "sessions") return void this.copy(attachCommand(this.options.thread));
 		const row = this.tab === "ports" ? this.selectedRow() : undefined;
-		if (row?.kind !== "preview") return this.say("y copies a preview's link selected in Ports, or the attach command in Details.");
+		if (row?.kind !== "preview") return this.say("y copies a preview's link selected in Ports, the attach command in Details, or nexus attach in Sessions.");
 		void this.copy(row.preview.url);
 	}
 
@@ -880,9 +1019,9 @@ export class ThreadScreen implements Component, Focusable {
 	/** The views by name, the shown one in the accent colour, with their keys. */
 	private tabLine(width: number): string {
 		const t = this.theme;
-		const ports = portRows(this.shown()).length;
+		const counts: Record<Tab, number> = { conversation: 0, details: 0, ports: portRows(this.shown()).length, sessions: this.sessions().length };
 		const parts = tabs.map(({ tab, label }, i) => {
-			const name = `${label}${tab === "ports" && ports > 0 ? ` ${ports}` : ""}`;
+			const name = `${label}${counts[tab] > 0 ? ` ${counts[tab]}` : ""}`;
 			return `${t.fg("dim", String(i + 1))} ${tab === this.tab ? t.fg("accent", t.bold(name)) : t.fg("muted", name)}`;
 		});
 		return truncateToWidth(` ${parts.join("   ")}`, width);
@@ -919,13 +1058,16 @@ export class ThreadScreen implements Component, Focusable {
 		const expand = rawKeyHint(this.options.keybindings.getKeys("app.tools.expand").join("/"), "expand tools");
 		let keys: string[];
 		if (this.menu) keys = [rawKeyHint("j/k", "move"), rawKeyHint("enter", "choose"), rawKeyHint("esc", "cancel")];
+		else if (this.form) keys = [rawKeyHint("tab", "next field"), rawKeyHint("←→", "harness"), rawKeyHint("enter", "open"), rawKeyHint("esc", "cancel")];
 		else if (this.help) keys = [rawKeyHint("any key", "closes the help")];
 		else if (this.mode === "insert") keys = [rawKeyHint("esc", "normal mode"), rawKeyHint("enter", "send"), rawKeyHint("/", "commands"), rawKeyHint("pgup/pgdn", "scroll"), expand];
 		else {
 			const move =
 				this.tab === "ports"
-					? [rawKeyHint("j/k", "select"), k("activate", "publish"), k("unpublish", "unpublish"), k("copy", "copy")]
-					: [rawKeyHint("j/k", "scroll"), rawKeyHint("d/u", "half page")];
+					? [rawKeyHint("j/k", "select"), k("activate", "publish"), k("remove", "unpublish"), k("copy", "copy")]
+					: this.tab === "sessions"
+						? [rawKeyHint("j/k", "select"), k("activate", "attach"), k("remove", "close"), k("openSession", "open"), k("copy", "copy")]
+						: [rawKeyHint("j/k", "scroll"), rawKeyHint("d/u", "half page")];
 			keys = [k("insert", "write"), ...move, rawKeyHint("h/l", "views"), k("actions", "actions"), k("help", "keys"), k("close", "close"), ...(this.tab === "conversation" ? [expand] : [])];
 		}
 		const mode = this.mode === "insert" ? t.bold(t.fg("success", "INSERT")) : t.bold(t.fg("accent", "NORMAL"));
@@ -954,11 +1096,15 @@ export class ThreadScreen implements Component, Focusable {
 				return { lines: this.body.flatMap((c) => c.render(width)) };
 			case "details":
 				return { lines: ["", ...detailLines(this.theme, this.detail, this.nodes, this.shown(), this.now(), width)] };
-			case "ports": {
-				const shown = this.shown();
-				this.port = Math.max(0, Math.min(portRows(shown).length - 1, this.port));
-				const { lines, rows } = portLines(this.theme, this.detail, shown, this.portChanges, this.port, width);
-				const focus = rows[this.port];
+			case "ports":
+			case "sessions": {
+				const tab = this.tab;
+				this.selected[tab] = Math.max(0, Math.min(this.rowCount(tab) - 1, this.selected[tab]));
+				const { lines, rows } =
+					tab === "ports"
+						? portLines(this.theme, this.detail, this.shown(), this.portChanges, this.selected.ports, width)
+						: sessionLines(this.theme, this.detail, this.sessions(), this.sessionChanges, this.selected.sessions, width);
+				const focus = rows[this.selected[tab]];
 				return { lines: ["", ...lines], ...(focus ? { focus: [focus[0] + 1, focus[1] + 1] as [number, number] } : {}) };
 			}
 		}
@@ -972,7 +1118,9 @@ export class ThreadScreen implements Component, Focusable {
 			"",
 			...(this.menu
 				? [` ${t.fg("accent", t.bold(this.menu.title))}`, ...this.menu.list.render(width)]
-				: this.editor.render(width).map((line) => (this.mode === "insert" ? line : line.replaceAll(cursorStart, "").replaceAll(cursorEnd, "")))),
+				: this.form
+					? this.form.render(width)
+					: this.editor.render(width).map((line) => (this.mode === "insert" ? line : line.replaceAll(cursorStart, "").replaceAll(cursorEnd, "")))),
 		];
 		const footer = this.footer(width);
 		const top = [this.tabLine(width)];

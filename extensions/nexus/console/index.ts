@@ -8,13 +8,27 @@
  */
 import { copyToClipboard, getMarkdownTheme, SettingsManager, type ExtensionUIContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { addProject, listNodes, listProjects, listThreads, previewPort, sendText, showThread, startThread, unpreviewPort, type Nexus } from "../cli.ts";
+import {
+	addProject,
+	attachThread,
+	closeSession,
+	listNodes,
+	listProjects,
+	listThreads,
+	openSession,
+	previewPort,
+	sendText,
+	showThread,
+	startThread,
+	unpreviewPort,
+	type Nexus,
+} from "../cli.ts";
 import type { Action } from "../commands.ts";
 import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
 import type { NodeSummary, ThreadRow } from "../contract.ts";
 import { inScope, type Scope } from "../scope.ts";
 import type { Viewed } from "../store.ts";
-import { isClosed, noteParked, startArgs, type Parked } from "./model.ts";
+import { attachCommand, isClosed, noteParked, startArgs, type Parked } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { ProjectFormView } from "./project-form.ts";
 import { ProjectPicker, type ProjectEnd } from "./project-picker.ts";
@@ -86,6 +100,26 @@ export function userDisplay(cwd: string): Display {
 		editorPaddingX: settings.getEditorPaddingX(),
 		markdownTheme: { ...getMarkdownTheme(), codeBlockIndent: settings.getCodeBlockIndent() },
 	};
+}
+
+/**
+ * Gives the terminal to `nexus attach` until the person detaches, as pi gives it to an external editor: the TUI
+ * stops, which hands back the keyboard and the screen, and starts again after, drawing everything afresh. Ctrl+C in
+ * the meantime, such as while the CLI waits for a paused pylon, reaches the CLI, which stops, and not pi, which
+ * ignores it as it does while suspended.
+ */
+async function attached(nexus: Nexus, tui: TUI, thread: string): Promise<void> {
+	const ignore = () => {};
+	process.on("SIGINT", ignore);
+	tui.stop();
+	try {
+		tui.terminal.write(`Attaching to the sessions of ${thread} with ${attachCommand(thread)}. Detach from Herdr to come back to pi.\n`);
+		await attachThread(nexus, thread);
+	} finally {
+		process.off("SIGINT", ignore);
+		tui.start();
+		tui.requestRender(true);
+	}
 }
 
 /** Nodes, or why they cannot be read. The start form and the inspector work without them, saying so. */
@@ -178,6 +212,24 @@ export class Console {
 	/** The start form, then the thread it started. False when this pi cannot show it. */
 	start(ui: ExtensionUIContext, cwd: string, initial: { project?: string; title?: string }): Promise<boolean> {
 		return this.navigate(ui, cwd, [{ kind: "start", initial }]);
+	}
+
+	/**
+	 * Attaches this terminal to the thread's pylon until the person detaches. False when this pi has no terminal to
+	 * give, as in RPC mode.
+	 */
+	async attach(ui: ExtensionUIContext, thread: string): Promise<boolean> {
+		const shown = await this.custom<Error | null>(ui, (tui, _theme, _keybindings, done) => {
+			attached(this.nexus, tui, thread).then(
+				() => done(null),
+				(err: unknown) => done(err instanceof Error ? err : new Error(String(err))),
+			);
+			// Nothing to draw: the terminal is the attach's until it ends, and then this is gone.
+			return { render: () => [], invalidate() {} };
+		});
+		if (shown === undefined) return false;
+		if (shown.result !== null) throw shown.result;
+		return true;
 	}
 
 	/** The thread view. False when this pi cannot show it. */
@@ -386,6 +438,9 @@ export class Console {
 				},
 				preview: (port) => previewPort(nexus, thread, port, signal),
 				unpublish: (port) => unpreviewPort(nexus, thread, port, signal),
+				openSession: (harness, title) => openSession(nexus, thread, { harness, ...(title === undefined ? {} : { title }) }, signal),
+				closeSession: (pane) => closeSession(nexus, thread, pane, signal),
+				attach: () => attached(nexus, tui, thread),
 				refresh: () => void refreshDetail(),
 				rewatch: () => watch(),
 				copy: (text) => copyToClipboard(text),

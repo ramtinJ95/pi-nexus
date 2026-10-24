@@ -4,7 +4,7 @@
  * folds, the same run bar and the same reasons a thread takes no messages.
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, Preview, Project, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
+import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
 import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
 import type { Seen } from "../store.ts";
 
@@ -33,6 +33,52 @@ export const badge = (actual: string): [label: string, tone: Tone] => actualBadg
 export const desiredTone: Readonly<Record<DesiredPhase, Tone>> = { running: "ok", paused: "idle", deleted: "muted" };
 export const sessionTone: Readonly<Record<string, Tone>> = { working: "work", idle: "idle", blocked: "bad", done: "ok", unknown: "muted" };
 export const harnessLabel: Readonly<Record<string, string>> = { "claude-code": "Claude Code", pi: "pi", shell: "Shell" };
+
+/** The command that attaches a terminal on this Mac to the thread's pylon. */
+export const attachCommand = (thread: string) => `nexus attach ${thread}`;
+/** How to reach a pylon's node when ssh cannot as it is, which the CLI's own failure repeats. */
+export const sshHint = `Attaching needs Nexus CLI 0.5.0 and ssh to the pylon's node. When ssh needs another user or an alias for the node, set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json, or NEXUS_ATTACH, as the CLI's docs/cli.md describes.`;
+
+/** A session as a person names it: its harness, and its title when it has one, such as `Claude Code "login"`. */
+export const sessionName = (harness: string, title: string | null | undefined) =>
+	`${harnessLabel[harness] ?? harness}${title ? ` "${title}"` : ""}`;
+
+/**
+ * How long an open or close confirmed in the thread view outweighs details that do not show it. The node reads its
+ * sessions again once the CLI has answered, so the next details can still show them as they were.
+ */
+export const sessionSettleMs = 30_000;
+
+/**
+ * What the person did to the thread's sessions from the thread view: the opens and closes under way, and those
+ * confirmed that the details have not shown yet, each with when it was confirmed.
+ */
+export interface SessionChanges {
+	opening: { harness: string; title: string | undefined }[];
+	opened: { session: OpenedSession; at: number }[];
+	closing: Set<string>;
+	closed: Map<string, number>;
+}
+export const noSessionChanges = (): SessionChanges => ({ opening: [], opened: [], closing: new Set(), closed: new Map() });
+
+/** Forgets the confirmations that `sessions`, just read, show, or that have waited `sessionSettleMs` for it. */
+export function settleSessions(changes: SessionChanges, sessions: readonly Session[], now: number): void {
+	const listed = (pane: string) => sessions.some((s) => s.herdrPane === pane);
+	changes.opened = changes.opened.filter(({ session, at }) => !listed(session.herdrPane) && now - at < sessionSettleMs);
+	for (const [pane, at] of changes.closed) if (!listed(pane) || now - at >= sessionSettleMs) changes.closed.delete(pane);
+}
+
+/**
+ * The sessions as the details list them, with the confirmations they do not show yet: a pane just closed is gone,
+ * and a session just opened is there, `opened` until the node reports it.
+ */
+export function shownSessions(sessions: readonly Session[], changes: SessionChanges): Session[] {
+	const listed = sessions.filter((s) => !changes.closed.has(s.herdrPane));
+	const opened = changes.opened
+		.filter(({ session }) => !changes.closed.has(session.herdrPane) && !sessions.some((s) => s.herdrPane === session.herdrPane))
+		.map(({ session }): Session => ({ ...session, status: "opened", harnessSessionId: null }));
+	return [...listed, ...opened];
+}
 
 /**
  * What a thread is doing, most urgent first: the agent mid-turn hides a running pylon, never a failed one. `actual`
