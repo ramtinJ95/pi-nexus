@@ -79,9 +79,10 @@ class NexusSession {
 		this.attach(ui);
 		if (!this.strip) return;
 		void this.refresh();
-		if (this.scope.project !== null) {
+		const asked = this.scope.project;
+		if (asked !== null) {
 			listProjects(this.nexus, this.closed.signal).then(
-				(projects) => this.scope.check(projects),
+				(projects) => this.scope.check(projects, asked),
 				() => {},
 			);
 		}

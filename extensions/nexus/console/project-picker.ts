@@ -12,6 +12,7 @@ import { KeyReader, type Binding } from "./keys.ts";
 export type ProjectEnd = { kind: "scope"; project: string | null } | { kind: "new" } | { kind: "cancel" };
 
 type Row = { kind: "all" } | { kind: "project"; project: Project } | { kind: "new" };
+const visibleRows = 12;
 
 type Command = "down" | "up" | "top" | "bottom" | "choose" | "cancel";
 const projectKeys: readonly Binding<Command>[] = [
@@ -92,7 +93,9 @@ export class ProjectPicker implements Component, Focusable {
 		const column = Math.max(...rows.map((r) => visibleWidth(name(r)))) + 2;
 		const lines = [...new DynamicBorder().render(width), "", ` ${t.fg("accent", t.bold("Projects"))}`, ""];
 		if (this.error) lines.push(...wrapTextWithAnsi(this.error, Math.max(10, width - 2)).map((line) => ` ${t.fg("error", line)}`), "");
-		for (const [i, row] of rows.entries()) {
+		// Many projects scroll, as the thread picker's rows do, so the selected one stays in sight.
+		const start = Math.max(0, Math.min(this.selected - Math.floor(visibleRows / 2), rows.length - visibleRows));
+		for (const [i, row] of rows.slice(start, start + visibleRows).map((r, at) => [start + at, r] as const)) {
 			const selected = i === this.selected;
 			const prefix = selected ? t.fg("accent", "→ ") : "  ";
 			const label = row.kind === "new" ? t.fg(selected ? "accent" : "muted", name(row)) : selected ? t.fg("accent", name(row)) : name(row);
@@ -101,6 +104,7 @@ export class ProjectPicker implements Component, Focusable {
 			lines.push(` ${prefix}${label}${detail === "" ? "" : `${" ".repeat(column - visibleWidth(name(row)))}${t.fg("dim", detail)}`}`);
 			if (row.kind === "all" && this.projects === undefined && this.error === undefined) lines.push(`   ${t.fg("muted", "Reading the projects...")}`);
 		}
+		if (rows.length > visibleRows) lines.push(` ${t.fg("dim", `(${this.selected + 1}/${rows.length})`)}`);
 		const hints = [rawKeyHint("j/k", "move"), rawKeyHint("gg/ge", "first or last"), rawKeyHint("enter", "choose"), rawKeyHint("esc", "cancel")];
 		lines.push("", ` ${hints.join("  ")}`, "", ...new DynamicBorder().render(width));
 		return lines.map((line) => truncateToWidth(line, width));

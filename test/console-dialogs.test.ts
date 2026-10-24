@@ -247,6 +247,22 @@ describe("project picker", () => {
 		expect([...u.ends, ...v.ends]).toEqual([{ kind: "cancel" }, { kind: "cancel" }]);
 	});
 
+	test("many projects scroll, keeping the selected row in sight", () => {
+		const many = Array.from({ length: 30 }, (_, i) => ({ id: `p${String(i).padStart(2, "0")}`, repoUrl: `git@example.com:p${i}`, defaultNode: "firebat", defaultBranch: "main" }));
+		const picker = new ProjectPicker(fakeTui(), piTheme(), () => {}, "p20");
+		picker.setProjects(many);
+		const text = () => plain(picker.render(100));
+		expect(text().split("\n").length).toBeLessThan(25);
+		expect(text()).toMatch(/→ p20 .*current\n/);
+		expect(text()).toContain("(22/32)");
+		picker.handleInput("G");
+		expect(text()).toContain("→ + New project…");
+		picker.handleInput("g");
+		picker.handleInput("g");
+		expect(text()).toContain("→ All projects");
+		expect(text()).not.toContain("New project");
+	});
+
 	test("before the projects load, and when they cannot be read, All projects and New project still work", () => {
 		const p = open("site", false);
 		expect(p.text()).toContain("Reading the projects...");

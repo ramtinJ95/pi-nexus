@@ -559,6 +559,19 @@ describe("console", () => {
 			await done;
 		});
 
+		test("the start form finds out a remembered project no longer exists, and starts on the first project instead", async () => {
+			const settings = memorySettings({ strip: false, project: "gone" });
+			const n = load(scoped, { settings });
+			const done = n.run("new");
+			await n.until(() => n.shown.length === 1 && n.text().includes("Start a thread"), "the start form");
+			expect(n.text()).toContain("[acme]");
+			expect(n.text()).not.toContain("There is no project gone");
+			expect(n.notified).toEqual([["The project gone no longer exists, so Nexus shows every project again.", "warning"]]);
+			expect(settings.writes).toEqual([{ project: null }]);
+			n.shown[0]!.done(null);
+			await done;
+		});
+
 		test("/nexus project shows the scope, and /nexus project <id> or all switches it", async () => {
 			const settings = memorySettings();
 			const n = load(scoped, { settings });

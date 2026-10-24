@@ -42,11 +42,12 @@ export class Scope {
 
 	/**
 	 * Goes back to every project, saying so, when the project shown is not among `projects`, as after it was deleted.
-	 * Saving that makes the notice a one-time one.
+	 * Saving that makes the notice a one-time one. `asked` is the project shown when the list was asked for: a list
+	 * read before another project was chosen, or added, cannot tell whether that one exists.
 	 */
-	check(projects: readonly Project[]): void {
+	check(projects: readonly Project[], asked: string | null): void {
 		const gone = this.current;
-		if (gone === null || projects.some((p) => p.id === gone)) return;
+		if (gone === null || gone !== asked || projects.some((p) => p.id === gone)) return;
 		this.set(null);
 		this.say(`The project ${gone} no longer exists, so Nexus shows every project again.`, "warning");
 	}

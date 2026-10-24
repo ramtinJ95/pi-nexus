@@ -262,7 +262,9 @@ export class Console {
 					break;
 				}
 				case "start": {
+					const asked = this.scope.project;
 					const [projects, nodes] = await Promise.all([listProjects(this.nexus, this.closed), nodesOrError(this.nexus, this.closed)]);
+					this.scope.check(projects, asked);
 					const shown = await this.custom<string | null>(ui, (tui, theme, keybindings, done) =>
 						new StartFormView({
 							tui,
@@ -302,13 +304,14 @@ export class Console {
 		const begin = inOrder();
 		const load = async () => {
 			const current = begin();
+			const asked = this.scope.project;
 			try {
 				const [threads, projects] = await Promise.all([
 					listThreads(this.nexus, ["--all"], signal),
 					listProjects(this.nexus, signal).catch((err: unknown) => err as Error),
 				]);
 				if (signal.aborted || !current()) return;
-				if (Array.isArray(projects)) this.scope.check(projects);
+				if (Array.isArray(projects)) this.scope.check(projects, asked);
 				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked }, this.scope.project);
 				if (!Array.isArray(projects)) picker.setError(`The projects could not be read, so only projects with threads show: ${message(projects)}`);
 			} catch (err) {
@@ -327,11 +330,12 @@ export class Console {
 
 	private projectPicker(tui: TUI, theme: Theme, done: (end: ProjectEnd) => void) {
 		const stop = new AbortController();
-		const picker = new ProjectPicker(tui, theme, done, this.scope.project);
+		const asked = this.scope.project;
+		const picker = new ProjectPicker(tui, theme, done, asked);
 		listProjects(this.nexus, AbortSignal.any([stop.signal, this.closed])).then(
 			(projects) => {
 				if (stop.signal.aborted) return;
-				this.scope.check(projects);
+				this.scope.check(projects, asked);
 				picker.setProjects(projects);
 			},
 			(err: unknown) => stop.signal.aborted || picker.setError(`The projects could not be read: ${message(err)}`),

@@ -23,7 +23,8 @@ import {
 } from "../extensions/nexus/console/model.ts";
 import type { RenderedEntry } from "../extensions/nexus/contract.ts";
 import { reduce } from "../extensions/nexus/thread.ts";
-import { asked, detail, editDetails, entries, live, runningCall, working } from "./console-fixture.ts";
+import { Scope } from "../extensions/nexus/scope.ts";
+import { asked, detail, editDetails, entries, live, memorySettings, runningCall, working } from "./console-fixture.ts";
 import { idA, idB, idC, idle, row, thread } from "./fixtures.ts";
 
 const project = { id: "nexus", repoUrl: "git@example.com:nexus", defaultNode: "firebat", defaultBranch: "main" };
@@ -225,5 +226,22 @@ describe("previews and starting", () => {
 		expect(startArgs({ title: "", project: "nexus", node: "nuc", branch: "dev", message: "go" })).toEqual({ project: "nexus", message: "go", node: "nuc", branch: "dev" });
 		expect(startHint(project, { title: "", project: "nexus", node: "", branch: "", message: "" })).toBe("Boots a pylon on firebat and checks out main.");
 		expect(startHint(project, { title: "", project: "nexus", node: "nuc", branch: "dev", message: "" })).toBe("Boots a pylon on nuc and checks out dev.");
+	});
+});
+
+describe("the project scope", () => {
+	test("a projects list read for an older scope leaves the scope chosen since alone", () => {
+		const settings = memorySettings({ project: "gone" });
+		const said: string[] = [];
+		const scope = new Scope(settings, (message) => said.push(message), () => {});
+		const asked = scope.project;
+		scope.set("fresh");
+		// The list was read before fresh existed, so it cannot say fresh is gone.
+		scope.check([project], asked);
+		expect(scope.project).toBe("fresh");
+		scope.check([project], scope.project);
+		expect(scope.project).toBeNull();
+		expect(said).toEqual(["The project fresh no longer exists, so Nexus shows every project again."]);
+		expect(settings.writes).toEqual([{ project: "fresh" }, { project: null }]);
 	});
 });
