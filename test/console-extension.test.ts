@@ -396,6 +396,27 @@ describe("console", () => {
 		await done;
 	});
 
+	test("a failed send kept as a draft is retried with its request ID after going to the picker and back", async () => {
+		// The reply is lost, so pi cannot tell whether Nexus took the message.
+		const n = load({ ...scenario, fail: { send: { exit: 2, kind: "unreachable", error: "connection reset" } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
+		n.type("ship it");
+		await n.until(() => n.text().includes("The message was not sent"), "the failed send");
+		n.press("\x1b", "t");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		n.press("\x1b");
+		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+		expect(n.text()).toContain("ship it");
+		n.press("i", "\r");
+		await n.until(() => n.calls().filter((c) => c[0] === "send").length === 2, "the retry");
+		const [first, retry] = n.calls().filter((c) => c[0] === "send");
+		expect(first![3]).toMatch(/^--request-id=msg:/);
+		expect(retry).toEqual(first);
+		n.press("\x1b", "q");
+		await done;
+	});
+
 	test("Start again from a failed thread opens the form with its project and title, and cancelling it goes back", async () => {
 		const n = load(scenario);
 		const done = n.run(`open ${idA}`);

@@ -250,6 +250,15 @@ const queuedShown = 3;
 /** The transcript lines that a pile of notes never takes. */
 const minBody = 3;
 
+/**
+ * What the composer held when the person left a thread: its text, and the send that failed, whose request ID a retry
+ * of the same text must reuse, since Nexus may have taken it before its reply was lost.
+ */
+export interface Draft {
+	text: string;
+	failed?: { text: string; steer: boolean; requestId: string };
+}
+
 export interface ScreenOptions {
 	tui: TUI;
 	theme: Theme;
@@ -258,8 +267,8 @@ export interface ScreenOptions {
 	thread: string;
 	actions: ScreenActions;
 	done(end: ScreenEnd): void;
-	/** The message the composer held when the thread was last left. */
-	draft?: string;
+	/** What the composer held when the thread was last left. */
+	draft?: Draft;
 	now?: () => number;
 }
 
@@ -318,7 +327,10 @@ export class ThreadScreen implements Component, Focusable {
 		this.editor.onEscape = () => this.setMode("normal");
 		this.editor.onAction("app.tools.expand", () => this.toggleExpanded());
 		this.editor.onAction("app.clear", () => this.editor.setText(""));
-		if (options.draft !== undefined) this.editor.setText(options.draft);
+		if (options.draft !== undefined) {
+			this.editor.setText(options.draft.text);
+			if (options.draft.failed !== undefined) this.outgoing = { ...options.draft.failed, inFlight: false };
+		}
 		this.ticker = setInterval(() => {
 			this.updateStatus();
 			this.tui.requestRender();
@@ -425,9 +437,12 @@ export class ThreadScreen implements Component, Focusable {
 		this.options.actions.rewatch();
 	}
 
-	/** What the composer holds, unsent. */
-	get draft(): string {
-		return this.editor.getText();
+	/** What the composer holds, unsent, with the send that failed. A send still in flight counts as failed once left. */
+	get draft(): Draft {
+		const text = this.editor.getText();
+		if (this.outgoing === undefined) return { text };
+		const { text: sent, steer, requestId } = this.outgoing;
+		return { text, failed: { text: sent, steer, requestId } };
 	}
 
 	say(text: string, error = false): void {

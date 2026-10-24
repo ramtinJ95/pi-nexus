@@ -1,11 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { settingsFile, viewedFile } from "../extensions/nexus/store.ts";
 
 const dirs: string[] = [];
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+/** A pi session marking `thread` in another process, holding the lock for `holdMs` between its read and write. */
+const racer = (at: string, thread: string, when: number, holdMs: number) =>
+	Bun.spawn(["bun", path.join(import.meta.dir, "store-racer.ts"), at, thread, String(when), String(holdMs)], { stdout: "pipe", stderr: "pipe" });
+
+/** Waits until `run` says it holds the lock. */
+async function holding(run: ReturnType<typeof racer>): Promise<void> {
+	const reader = run.stdout.getReader();
+	let out = "";
+	while (!out.includes("held")) {
+		const { value, done } = await reader.read();
+		if (done) throw new Error(`the racer ended before it held the lock: ${await new Response(run.stderr).text()}`);
+		out += new TextDecoder().decode(value);
+	}
+	reader.releaseLock();
+}
 
 function file(name = "viewed.json") {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-nexus-store-"));
@@ -31,17 +47,61 @@ describe("the looks store", () => {
 		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ since: 100, threads: { "th-a": 500, "th-b": 600 } });
 	});
 
-	test("two sessions that mark at the same moment both keep their look", async () => {
+	test("a session that marks while another holds the lock waits its turn, so both keep their look", async () => {
 		const at = file();
 		viewedFile(at, () => 1).read();
-		const racer = path.join(import.meta.dir, "store-racer.ts");
-		// Each holds between its read and its write, so without a lock both read the empty store and the later
-		// rename drops the other's look.
-		const race = (thread: string, when: number) => Bun.spawn(["bun", racer, at, thread, String(when), "300"], { stderr: "pipe" });
-		const runs = [race("th-a", 500), race("th-b", 600)];
-		const codes = await Promise.all(runs.map((r) => r.exited));
-		expect(codes).toEqual([0, 0]);
+		const first = racer(at, "th-a", 500, 300);
+		await holding(first);
+		// The first is between its read and its write, so without a lock the second's write is lost.
+		const second = racer(at, "th-b", 600, 0);
+		expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
 		expect(viewedFile(at).read().threads).toEqual({ "th-a": 500, "th-b": 600 });
+	});
+
+	test("a live session's lock is never taken over, however old", () => {
+		const at = file();
+		viewedFile(at, () => 1).read();
+		const lock = `${at}.lock`;
+		writeFileSync(lock, `${process.pid} someone-else`);
+		const minuteAgo = new Date(Date.now() - 60_000);
+		utimesSync(lock, minuteAgo, minuteAgo);
+		expect(() => viewedFile(at).mark("th-a", 500)).toThrow("is held by another pi session");
+		expect(readFileSync(lock, "utf8")).toBe(`${process.pid} someone-else`);
+		expect(viewedFile(at).read().threads).toEqual({});
+	});
+
+	test("a dead session's lock is taken over at once", async () => {
+		const at = file();
+		viewedFile(at, () => 1).read();
+		const dead = Bun.spawn(["true"]);
+		await dead.exited;
+		writeFileSync(`${at}.lock`, `${dead.pid} gone`);
+		viewedFile(at).mark("th-a", 500);
+		expect(viewedFile(at).read().threads).toEqual({ "th-a": 500 });
+		expect(existsSync(`${at}.lock`)).toBe(false);
+	});
+
+	test("a lock whose owner cannot be read is taken over only once stale", () => {
+		const at = file();
+		viewedFile(at, () => 1).read();
+		const lock = `${at}.lock`;
+		writeFileSync(lock, "");
+		expect(() => viewedFile(at).mark("th-a", 500)).toThrow("is held by another pi session");
+		const minuteAgo = new Date(Date.now() - 60_000);
+		utimesSync(lock, minuteAgo, minuteAgo);
+		viewedFile(at).mark("th-a", 500);
+		expect(viewedFile(at).read().threads).toEqual({ "th-a": 500 });
+	});
+
+	test("a session releases only its own lock", async () => {
+		const at = file();
+		viewedFile(at, () => 1).read();
+		const holder = racer(at, "th-a", 500, 300);
+		await holding(holder);
+		// Another session's lock in its place, as after a takeover, outlives the first session's release.
+		writeFileSync(`${at}.lock`, "4242 another");
+		expect(await holder.exited).toBe(0);
+		expect(readFileSync(`${at}.lock`, "utf8")).toBe("4242 another");
 	});
 
 	test("a prune drops the looks at threads the list no longer has, but not a look newer than the list", () => {

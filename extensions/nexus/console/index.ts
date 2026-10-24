@@ -15,7 +15,7 @@ import type { Viewed } from "../store.ts";
 import { isClosed, noteParked, startArgs, type Parked } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { StartFormView } from "./start-form.ts";
-import { ThreadScreen, type ScreenEnd } from "./thread-screen.ts";
+import { ThreadScreen, type Draft, type ScreenEnd } from "./thread-screen.ts";
 import type { Display } from "./transcript.ts";
 
 const pickerEveryMs = 5_000;
@@ -104,7 +104,7 @@ function workingThread(threads: readonly ThreadRow[]): string | undefined {
 
 export class Console {
 	/** Each thread's unsent message, kept while the person moves between views, however they leave the thread. */
-	private readonly drafts = new Map<string, string>();
+	private readonly drafts = new Map<string, Draft>();
 
 	constructor(
 		private readonly nexus: Nexus,
@@ -303,8 +303,9 @@ export class Console {
 			thread,
 			draft: this.drafts.get(thread),
 			done: (end) => {
-				if (screen.draft === "") this.drafts.delete(thread);
-				else this.drafts.set(thread, screen.draft);
+				const draft = screen.draft;
+				if (draft.text === "" && draft.failed === undefined) this.drafts.delete(thread);
+				else this.drafts.set(thread, draft);
 				done(end);
 			},
 			actions: {

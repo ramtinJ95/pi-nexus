@@ -3,7 +3,8 @@
  * outlive the session that made them: when each thread was last looked at, and the console's settings. Every pi
  * session on this Mac shares the files.
  */
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -51,40 +52,78 @@ const directory = () => path.join(getAgentDir(), "pi-nexus");
 export const defaultViewedFile = () => path.join(directory(), "viewed.json");
 export const defaultSettingsFile = () => path.join(directory(), "settings.json");
 
-/** A lock older than this was left by a session that died holding it. */
+/** A lock whose owner cannot be read, older than this, was left by a session that died while taking it. */
 const staleLockMs = 5_000;
 /** How long a change waits for another session's before it fails. */
 const lockWaitMs = 2_000;
 
 const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+/** The lock's content, or undefined once it is gone. */
+function lockOwner(lock: string): string | undefined {
+	try {
+		return readFileSync(lock, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw err;
+	}
+}
+
 /**
- * Runs `change` holding `<file>.lock`, created exclusively, so two pi sessions' read-merge-writes of one file take
- * turns instead of renaming over each other. A lock left by a dead session is taken over once stale.
+ * Whether the session that wrote `owner`, `<pid> <random id>`, has died. A lock whose pid cannot be read, as while
+ * its owner is still writing it, counts as abandoned only once stale. A live pid holds the lock however old it is.
+ */
+function abandoned(lock: string, owner: string): boolean {
+	const pid = Number(owner.split(" ")[0]);
+	if (!Number.isInteger(pid) || pid <= 0) {
+		try {
+			return Date.now() - statSync(lock).mtimeMs > staleLockMs;
+		} catch (err) {
+			// Released meanwhile, so the next try takes it.
+			if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+			throw err;
+		}
+	}
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (err) {
+		// EPERM is a live process of another user.
+		return (err as NodeJS.ErrnoException).code === "ESRCH";
+	}
+}
+
+/**
+ * Runs `change` holding `<file>.lock`, created exclusively with this session's token in it, so two pi sessions'
+ * read-merge-writes of one file take turns instead of renaming over each other. A lock whose session died is taken
+ * over, and a session removes the lock only while it still holds its own token.
  */
 function locked<T>(file: string, change: () => T): T {
 	const lock = `${file}.lock`;
+	const token = `${process.pid} ${randomUUID()}`;
 	mkdirSync(path.dirname(file), { recursive: true });
 	const deadline = Date.now() + lockWaitMs;
 	for (;;) {
 		try {
-			closeSync(openSync(lock, "wx"));
+			writeFileSync(lock, token, { flag: "wx" });
 			break;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-			try {
-				if (Date.now() - statSync(lock).mtimeMs > staleLockMs) unlinkSync(lock);
-			} catch {
-				// The holder released it meanwhile; try again.
-			}
-			if (Date.now() > deadline) throw new Error(`${lock} is held by another pi session`);
-			sleep(10);
 		}
+		const owner = lockOwner(lock);
+		if (owner === undefined) continue;
+		if (abandoned(lock, owner)) {
+			// Only the lock judged abandoned goes, not one another session took over meanwhile.
+			if (lockOwner(lock) === owner) unlinkSync(lock);
+			continue;
+		}
+		if (Date.now() > deadline) throw new Error(`${lock} is held by another pi session`);
+		sleep(10);
 	}
 	try {
 		return change();
 	} finally {
-		unlinkSync(lock);
+		if (lockOwner(lock) === token) unlinkSync(lock);
 	}
 }
 
