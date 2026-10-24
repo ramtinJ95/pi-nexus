@@ -50,6 +50,7 @@ import {
 	shownPorts,
 	type PortChange,
 	confirmClosed,
+	confirmOpened,
 	noSessionChanges,
 	pausedRefusal,
 	sessionName,
@@ -703,7 +704,7 @@ export class ThreadScreen implements Component, Focusable {
 		this.say(`Opening ${sessionName(harness, title)}. Its agent can take a minute to start.`);
 		try {
 			const session = await this.options.actions.openSession(harness, title);
-			changes.opened.push({ session, at: this.now() });
+			confirmOpened(changes, session, this.detail?.sessions, this.now());
 			this.options.actions.refresh();
 			this.say(`Opened ${sessionName(session.harness, session.title)} in pane ${session.herdrPane}. Enter in Sessions, or /attach, attaches this terminal: pick the session's workspace in Herdr.`);
 		} catch (err) {

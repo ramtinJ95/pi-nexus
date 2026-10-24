@@ -733,6 +733,36 @@ describe("thread view", () => {
 		expect(s.text()).toMatch(/Claude Code  login fix  ● idle  %5  session sid-9/);
 	});
 
+	test("a session just opened settles once listed, even after a wake moves it and the pylon's other session", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("n", keys.enter);
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		// A wake put the existing pi session in %7 and the new one in %8: the new one shows once, the pi session too.
+		const movedPi = { ...detail.sessions[0]!, id: "%7", herdrPane: "%7" };
+		const fresh: Session = { id: "%8", state: "running", message: null, harness: "claude-code", herdrPane: "%8", status: "blocked", harnessSessionId: "sid-8", title: "claude-code" };
+		s.details({ ...withSessions, sessions: [withSessions.sessions[0]!, movedPi, withSessions.sessions[2]!, fresh] });
+		expect(s.text()).not.toContain("● opened");
+		expect(s.text()).toMatch(/pi +● working  %7  session abc/);
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● blocked  %8  session sid-8/);
+		expect(s.text()).toContain("4 Sessions 4");
+	});
+
+	test("a session just opened keeps its row while stale details list only the sessions there before, even in its pane", async () => {
+		// Before the open, pane %7 held another session of the same harness and title, which the open's pane now names.
+		const earlier: Session = { id: "%7", state: "running", message: null, harness: "claude-code", herdrPane: "%7", status: "idle", harnessSessionId: "sid-old", title: "claude-code" };
+		const s = open(undefined, { shown: { ...withSessions, sessions: [...withSessions.sessions, earlier] } });
+		s.normal("n", keys.enter);
+		s.release();
+		await s.settle();
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, earlier] });
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		s.tick(30_000);
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, earlier] });
+		expect(s.text()).not.toContain("● opened");
+	});
+
 	test("Enter in Sessions, /attach and Attach in the actions attach this terminal, and say how it ended", async () => {
 		const s = open(undefined, { shown: withSessions });
 		s.normal("m");

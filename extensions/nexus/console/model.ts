@@ -86,16 +86,32 @@ const openedSession = (session: OpenedSession): Session => ({ ...session, id: se
 export const sessionSettleMs = 30_000;
 
 /**
+ * An open the CLI confirmed, with the sessions the details listed then, by ID and harness session ID, or null when
+ * no details had been read.
+ */
+export interface Opened {
+	session: OpenedSession;
+	at: number;
+	before: { ids: string[]; harnessSessionIds: string[] } | null;
+}
+
+/**
  * What the person did to the thread's sessions from the thread view: the opens and closes under way, the closes by
  * session ID, and those confirmed that the details have not shown yet, each with when it was confirmed.
  */
 export interface SessionChanges {
 	opening: { harness: string; title: string | undefined }[];
-	opened: { session: OpenedSession; at: number }[];
+	opened: Opened[];
 	closing: Set<string>;
 	closed: { session: Session; at: number }[];
 }
 export const noSessionChanges = (): SessionChanges => ({ opening: [], opened: [], closing: new Set(), closed: [] });
+
+/** Records an open the CLI confirmed, and what `listed`, the details read last, held then. */
+export function confirmOpened(changes: SessionChanges, session: OpenedSession, listed: readonly Session[] | undefined, now: number): void {
+	const before = listed === undefined ? null : { ids: listed.map((s) => s.id), harnessSessionIds: listed.flatMap((s) => (s.harnessSessionId === null ? [] : [s.harnessSessionId])) };
+	changes.opened.push({ session, at: now, before });
+}
 
 /** Records a close the CLI confirmed. A session just opened and now closed is forgotten, whatever the details say next. */
 export function confirmClosed(changes: SessionChanges, session: Session, now: number): void {
@@ -103,11 +119,38 @@ export function confirmClosed(changes: SessionChanges, session: Session, now: nu
 	changes.opened = changes.opened.filter((o) => !sameSession(openedSession(o.session), session));
 }
 
+/**
+ * The opens that `sessions` list, each against a session of its own. An open is listed in its own pane, checked first,
+ * unless the session there has a harness session ID listed before the open, which makes it the pane's earlier session
+ * in stale details. A wake can move the new session to another pane, so an open is also listed by a session of its
+ * harness and title whose harness session ID and ID were both not listed before. A session with no harness session ID
+ * could be an older one that moved, so it lists an open only in its pane. An open nothing lists, or one the details
+ * cannot tell from another, keeps its row until `sessionSettleMs`.
+ */
+function listedOpens(opens: readonly Opened[], sessions: readonly Session[]): Set<Opened> {
+	const taken = new Set<Session>();
+	const listed = new Set<Opened>();
+	const claim = (open: Opened, matches: (s: Session) => boolean) => {
+		const session = sessions.find((s) => !taken.has(s) && matches(s));
+		if (session === undefined) return;
+		taken.add(session);
+		listed.add(open);
+	};
+	const before = (open: Opened, s: Session) => s.harnessSessionId !== null && open.before?.harnessSessionIds.includes(s.harnessSessionId) === true;
+	for (const open of opens) claim(open, (s) => s.herdrPane === open.session.herdrPane && !before(open, s));
+	for (const open of opens) {
+		if (listed.has(open) || open.before === null) continue;
+		const { ids } = open.before;
+		claim(open, (s) => s.harnessSessionId !== null && !before(open, s) && !ids.includes(s.id) && s.harness === open.session.harness && s.title === open.session.title);
+	}
+	return listed;
+}
+
 /** Forgets the confirmations that `sessions`, just read, show, or that have waited `sessionSettleMs` for it. */
 export function settleSessions(changes: SessionChanges, sessions: readonly Session[], now: number): void {
-	const listed = (session: Session) => sessions.some((s) => sameSession(s, session));
-	changes.opened = changes.opened.filter(({ session, at }) => !listed(openedSession(session)) && now - at < sessionSettleMs);
-	changes.closed = changes.closed.filter(({ session, at }) => listed(session) && now - at < sessionSettleMs);
+	const opens = listedOpens(changes.opened, sessions);
+	changes.opened = changes.opened.filter((o) => !opens.has(o) && now - o.at < sessionSettleMs);
+	changes.closed = changes.closed.filter(({ session, at }) => sessions.some((s) => sameSession(s, session)) && now - at < sessionSettleMs);
 }
 
 /**
@@ -116,7 +159,8 @@ export function settleSessions(changes: SessionChanges, sessions: readonly Sessi
  */
 export function shownSessions(sessions: readonly Session[], changes: SessionChanges): Session[] {
 	const closed = (session: Session) => changes.closed.some((c) => sameSession(session, c.session));
-	const opened = changes.opened.map(({ session }) => openedSession(session)).filter((o) => !closed(o) && !sessions.some((s) => sameSession(s, o)));
+	const opens = listedOpens(changes.opened, sessions);
+	const opened = changes.opened.filter((o) => !opens.has(o)).map((o) => openedSession(o.session)).filter((o) => !closed(o));
 	return [...sessions.filter((s) => !closed(s)), ...opened];
 }
 
