@@ -8,6 +8,9 @@
  *   so the picker marks one as new and one, whose pylon failed, as needing you;
  * - a line on stdout with the thread's ID.
  *
+ * Two projects, demo and site, list beside two nodes, and `nexus project add` adds a third, which the projects list
+ * from then on.
+ *
  * The pylon listens on three ports: the web service's, previewed, an ad hoc server's with no preview yet, which
  * `/open` publishes and `/unpublish` then closes, each slowly enough to show it, and a service's with no preview.
  *
@@ -132,14 +135,29 @@ const threads = [
 	other("th-0123456789cd", "Document the retry", {}),
 	other("th-0123456789ef", "Upgrade the probe's deps", { pylon: { node: "firebat", actualState: "failed", failed: "git clone: permission denied" } }),
 	other("th-00000000aaaa", "Spike: probe over HTTP/3", { status: "archived", desired: "paused", pylon: { node: "firebat", actualState: "paused", failed: null } }),
+	other("th-0000000051e0", "Landing page copy", { project: "site", pylon: { node: "nuc", actualState: "paused", failed: null }, desired: "paused" }),
 ];
+const project = (id: string, repoUrl: string, defaultNode: string) => ({
+	id,
+	repoUrl,
+	defaultBranch: "main",
+	defaultNode,
+	resources: { cpus: 2, memoryGiB: 4, diskGiB: 20 },
+	allowedHosts: [],
+	secrets: [],
+	logins: [],
+	preSetup: null,
+});
 const scenario = {
 	responses: {
 		threads,
 		show: detail,
 		wake: null,
-		nodes: [],
-		projects: [],
+		nodes: [
+			{ name: "firebat", tailnetHost: "firebat.tail0000.ts.net", state: "online" },
+			{ name: "nuc", tailnetHost: "nuc.tail0000.ts.net", state: "offline" },
+		],
+		projects: [project("demo", "git@github.com:ramtinJ95/probe-demo.git", "firebat"), project("site", "git@github.com:ramtinJ95/site.git", "nuc")],
 		preview: own,
 		unpreview: null,
 	},
