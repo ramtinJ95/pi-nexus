@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { createNexus } from "../extensions/nexus/cli.ts";
+import { createNexus, type Nexus } from "../extensions/nexus/cli.ts";
 import { memoryStores } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, idB, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
@@ -218,5 +218,55 @@ describe("/nexus", () => {
 		await n.run("send");
 		expect(n.notified[0]![0]).toStartWith("nexus: send needs a thread");
 		expect(n.calls().some((c) => c[0] === "send")).toBe(false);
+	});
+});
+
+describe("the status poll", () => {
+	/** A Nexus whose `threads` answers only when the test says, recording each run's signal. */
+	function held() {
+		const runs: { args: readonly string[]; signal: AbortSignal | undefined; answer: () => void }[] = [];
+		const nexus: Nexus = {
+			run: (args, signal) =>
+				new Promise((resolve, reject) => {
+					runs.push({ args, signal, answer: () => resolve(args[0] === "threads" ? threads : null) });
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+				}),
+			watch: async () => {},
+		};
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+		const pi = {
+			registerEntryRenderer() {},
+			registerTool() {},
+			registerCommand: (_name: string, options: { handler: typeof command }) => (command = options.handler),
+			on: (event: string, handler: (event: unknown, ctx: unknown) => void) => handlers.set(event, handler),
+			appendEntry() {},
+		} as unknown as ExtensionAPI;
+		const ctx = { hasUI: true, ui: { notify() {}, setStatus() {}, setWidget() {} } } as unknown as ExtensionCommandContext;
+		nexusExtension(pi, nexus, undefined, memoryStores());
+		cleanups.push(() => handlers.get("session_shutdown")?.(undefined, undefined));
+		return {
+			runs,
+			start: () => handlers.get("session_start")!({ type: "session_start" }, ctx),
+			shutdown: () => handlers.get("session_shutdown")!(undefined, undefined),
+			run: (args: string) => command!(args, ctx),
+		};
+	}
+	const threadsRuns = (runs: { args: readonly string[] }[]) => runs.filter((r) => r.args[0] === "threads");
+
+	test("/nexus strip off aborts the poll in flight and starts none", async () => {
+		const n = held();
+		n.start();
+		expect(threadsRuns(n.runs)).toHaveLength(1);
+		await n.run("strip off");
+		expect(threadsRuns(n.runs)).toHaveLength(1);
+		expect(n.runs[0]!.signal?.aborted).toBe(true);
+	});
+
+	test("the session's end aborts the poll in flight", () => {
+		const n = held();
+		n.start();
+		n.shutdown();
+		expect(n.runs[0]!.signal?.aborted).toBe(true);
 	});
 });

@@ -31,6 +31,19 @@ describe("the looks store", () => {
 		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ since: 100, threads: { "th-a": 500, "th-b": 600 } });
 	});
 
+	test("two sessions that mark at the same moment both keep their look", async () => {
+		const at = file();
+		viewedFile(at, () => 1).read();
+		const racer = path.join(import.meta.dir, "store-racer.ts");
+		// Each holds between its read and its write, so without a lock both read the empty store and the later
+		// rename drops the other's look.
+		const race = (thread: string, when: number) => Bun.spawn(["bun", racer, at, thread, String(when), "300"], { stderr: "pipe" });
+		const runs = [race("th-a", 500), race("th-b", 600)];
+		const codes = await Promise.all(runs.map((r) => r.exited));
+		expect(codes).toEqual([0, 0]);
+		expect(viewedFile(at).read().threads).toEqual({ "th-a": 500, "th-b": 600 });
+	});
+
 	test("a prune drops the looks at threads the list no longer has, but not a look newer than the list", () => {
 		const at = file();
 		const store = viewedFile(at, () => 100);

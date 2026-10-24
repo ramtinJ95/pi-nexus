@@ -258,6 +258,8 @@ export interface ScreenOptions {
 	thread: string;
 	actions: ScreenActions;
 	done(end: ScreenEnd): void;
+	/** The message the composer held when the thread was last left. */
+	draft?: string;
 	now?: () => number;
 }
 
@@ -316,6 +318,7 @@ export class ThreadScreen implements Component, Focusable {
 		this.editor.onEscape = () => this.setMode("normal");
 		this.editor.onAction("app.tools.expand", () => this.toggleExpanded());
 		this.editor.onAction("app.clear", () => this.editor.setText(""));
+		if (options.draft !== undefined) this.editor.setText(options.draft);
 		this.ticker = setInterval(() => {
 			this.updateStatus();
 			this.tui.requestRender();
@@ -420,6 +423,11 @@ export class ThreadScreen implements Component, Focusable {
 		this.unwatched = false;
 		this.say("Watching the thread again...");
 		this.options.actions.rewatch();
+	}
+
+	/** What the composer holds, unsent. */
+	get draft(): string {
+		return this.editor.getText();
 	}
 
 	say(text: string, error = false): void {

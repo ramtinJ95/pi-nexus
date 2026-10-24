@@ -706,6 +706,23 @@ describe("thread view", () => {
 		expect(s.text()).toBe(end);
 	});
 
+	test("keys a terminal sends as xterm modifyOtherKeys sequences type as they do in pi's editor", () => {
+		const s = open(undefined, { rows: 20 });
+		const end = s.text();
+		s.press("k");
+		expect(s.text()).not.toBe(end);
+		// G with Shift, as ESC[27;2;71~, follows the end again.
+		s.press("\x1b[27;2;71~");
+		expect(s.text()).toBe(end);
+		// g twice, unmodified, goes to the top.
+		s.press("\x1b[27;1;103~", "\x1b[27;1;103~");
+		expect(s.text()).toContain("Fix the retry in probe.ts so it backs off.");
+		// ctrl+g types nothing, so g, ctrl+g, g is not gg.
+		s.press("\x1b[27;2;71~", "\x1b[27;1;103~", "\x1b[27;5;103~", "g");
+		expect(s.text()).not.toContain("Fix the retry in probe.ts so it backs off.");
+		expect(s.text()).toMatch(/\nNORMAL {2}g {2}/);
+	});
+
 	test("vim's keys scroll: k and j a line, u and d or ctrl+u and ctrl+d half a page, gg the top and G or ge back to following", () => {
 		const s = open(undefined, { rows: 20 });
 		const end = s.text();

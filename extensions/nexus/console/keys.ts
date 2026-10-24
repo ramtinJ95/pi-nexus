@@ -4,7 +4,7 @@
  * key does and what the console says it does cannot drift apart.
  */
 import { rawKeyHint } from "@earendil-works/pi-coding-agent";
-import { decodeKittyPrintable, matchesKey, type KeyId } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, matchesKey, parseKey, type KeyId } from "@earendil-works/pi-tui";
 
 /** Keys pi names, matched with matchesKey. Anything else in a table is typed text, such as `j`, `G` or `gg`. */
 const named = new Set(["up", "down", "left", "right", "enter", "escape", "tab", "home", "end", "pageUp", "pageDown"]);
@@ -17,11 +17,24 @@ export interface Binding<C extends string> {
 	help: string;
 }
 
+/**
+ * The text of a key pi's parser names as one character, or as Shift and a letter, which is how it reads a key sent in
+ * another encoding, such as xterm modifyOtherKeys: ESC[27;2;71~ is shift+g, so G.
+ */
+function parsedPrintable(data: string): string | undefined {
+	const id = parseKey(data);
+	if (id === undefined) return undefined;
+	if ([...id].length === 1) return id;
+	const letter = /^shift\+([a-z])$/.exec(id)?.[1];
+	return letter?.toUpperCase();
+}
+
 /** The text a key types, or undefined for a key that types none, such as an arrow or ctrl+d. */
 function typed(data: string): string | undefined {
 	const kitty = decodeKittyPrintable(data);
 	if (kitty !== undefined) return kitty;
-	return [...data].length === 1 && data.charCodeAt(0) >= 32 && data.charCodeAt(0) !== 127 ? data : undefined;
+	if ([...data].length === 1) return data.charCodeAt(0) >= 32 && data.charCodeAt(0) !== 127 ? data : undefined;
+	return parsedPrintable(data);
 }
 
 /**

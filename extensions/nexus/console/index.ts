@@ -103,6 +103,9 @@ function workingThread(threads: readonly ThreadRow[]): string | undefined {
 }
 
 export class Console {
+	/** Each thread's unsent message, kept while the person moves between views, however they leave the thread. */
+	private readonly drafts = new Map<string, string>();
+
 	constructor(
 		private readonly nexus: Nexus,
 		private readonly closed: AbortSignal,
@@ -298,7 +301,12 @@ export class Console {
 			keybindings,
 			display: this.display(cwd),
 			thread,
-			done,
+			draft: this.drafts.get(thread),
+			done: (end) => {
+				if (screen.draft === "") this.drafts.delete(thread);
+				else this.drafts.set(thread, screen.draft);
+				done(end);
+			},
 			actions: {
 				async send(text, steer, requestId) {
 					await sendText(nexus, thread, text, steer, signal, requestId);

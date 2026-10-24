@@ -35,6 +35,8 @@ class NexusSession {
 	readonly closed = new AbortController();
 	private ui: ExtensionUIContext | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
+	/** The polling of the threads for the summary and strip, while the strip setting is on. */
+	private polling: AbortController | undefined;
 	private readonly follows = new Map<string, { stop: AbortController; view: ThreadView }>();
 	/** The threads last listed, for completion and titles. */
 	threads: ThreadRow[] = [];
@@ -61,7 +63,9 @@ class NexusSession {
 	attach(ui: ExtensionUIContext): void {
 		if (this.closed.signal.aborted) return;
 		this.ui = ui;
-		if (this.strip) this.timer ??= setInterval(() => void this.refresh(), statusEveryMs).unref();
+		if (!this.strip || this.polling !== undefined) return;
+		this.polling = new AbortController();
+		this.timer = setInterval(() => void this.refresh(), statusEveryMs).unref();
 	}
 
 	/** The session's start, where the summary and strip show at once rather than on the first poll. */
@@ -70,31 +74,40 @@ class NexusSession {
 		if (this.strip) void this.refresh();
 	}
 
+	/** Ends the polling, and the poll in flight with it, so no reply lands after the strip turned off. */
 	private stopPolling(): void {
+		this.polling?.abort();
+		this.polling = undefined;
 		clearInterval(this.timer);
 		this.timer = undefined;
 		this.ui?.setStatus("nexus", undefined);
 		this.ui?.setWidget("nexus-strip", undefined);
 	}
 
+	/**
+	 * Lists the threads for completion and the stored looks, and while the session polls, shows the summary and the
+	 * strip. A poll ends when the polling stops; a list after a command with the strip off ends with the session.
+	 */
 	async refresh(): Promise<void> {
 		if (this.closed.signal.aborted) return;
+		const polling = this.polling;
+		const signal = polling ? AbortSignal.any([polling.signal, this.closed.signal]) : this.closed.signal;
 		try {
 			const listedAt = Date.now();
-			this.threads = await listThreads(this.nexus, [], this.closed.signal);
+			this.threads = await listThreads(this.nexus, [], signal);
 			// The list leaves out only deleted threads, whose looks no marker reads again. A prune that cannot write
 			// keeps them, which costs nothing, and the next look says the store cannot be written.
 			try {
 				this.viewed.prune(new Set(this.threads.map((t) => t.id)), listedAt);
 			} catch {}
-			if (!this.strip) return;
+			if (polling === undefined || signal.aborted) return;
 			const marks = { seen: this.viewed.read(), parked: this.parked };
 			this.ui?.setStatus("nexus", summary(this.threads, marks));
 			const shown = chips(this.threads, marks);
 			const now = Date.now();
 			this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now) : undefined);
 		} catch (err) {
-			if (!this.closed.signal.aborted && this.strip) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
+			if (polling !== undefined && !signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
 		}
 	}
 
@@ -230,6 +243,7 @@ class NexusSession {
 
 	shutdown(): void {
 		this.closed.abort();
+		this.polling?.abort();
 		clearInterval(this.timer);
 		this.ui?.setStatus("nexus", undefined);
 		this.ui?.setWidget("nexus", undefined);
@@ -272,12 +286,15 @@ export default function nexusExtension(
 		getArgumentCompletions: (prefix) => complete(prefix, session.threads),
 		async handler(args, ctx) {
 			session.attach(ctx.ui);
+			let command: NexusCommand | undefined;
 			try {
-				await session.run(parseCommand(args), ctx);
+				command = parseCommand(args);
+				await session.run(command, ctx);
 			} catch (err) {
 				if (!session.closed.signal.aborted) ctx.ui.notify(`nexus: ${errorText(err)}`, "error");
 			}
-			void session.refresh();
+			// strip on refreshes itself, and strip off must not list again.
+			if (command?.name !== "strip") void session.refresh();
 		},
 	});
 	// Print and JSON modes have no status line or widgets to fill.

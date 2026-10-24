@@ -373,6 +373,29 @@ describe("console", () => {
 		await done;
 	});
 
+	test("a draft survives going to the picker and back, and each thread keeps its own", async () => {
+		const n = load(scenario);
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
+		n.press("i", ..."half-written draft", "\x1b");
+		n.press("t");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		// Esc leaves the picker without choosing, back to the thread.
+		n.press("\x1b");
+		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+		expect(n.text()).toContain("half-written draft");
+		n.press("t");
+		await n.until(() => n.shown.length === 4 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker again");
+		n.press("j", "\r");
+		await n.until(() => n.shown.length === 5 && n.text().includes(`(${idB})`), "the second thread");
+		expect(n.text()).not.toContain("half-written draft");
+		n.press("h");
+		await n.until(() => n.shown.length === 6 && n.text().includes(`(${idA})`), "the first thread again");
+		expect(n.text()).toContain("half-written draft");
+		n.press("q");
+		await done;
+	});
+
 	test("Start again from a failed thread opens the form with its project and title, and cancelling it goes back", async () => {
 		const n = load(scenario);
 		const done = n.run(`open ${idA}`);
