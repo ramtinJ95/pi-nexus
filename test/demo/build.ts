@@ -7,7 +7,7 @@
  * - a line on stdout with the thread's ID.
  *
  * The pylon listens on three ports: the web service's, previewed, an ad hoc server's with no preview yet, which
- * `/open` publishes slowly enough to show it opening, and a service's with no preview.
+ * `/open` publishes and `/unpublish` then closes, each slowly enough to show it, and a service's with no preview.
  *
  * With `stream`, the second run of the suite has passed, and the watch streams the agent's closing answer as live
  * events ten times a second, then commits it.
@@ -89,6 +89,8 @@ const detail = {
 	desired: "running",
 	attach: "herdr --session nexus",
 };
+const own = { pylon: "py-demo", service: "port-8080", httpsPort: 8444, ready: true, url: `${host}:8444/` };
+const opened = { ...detail, previews: [web, own], ports: ports.map((p) => (p.port === 8080 ? { ...p, preview: own } : p)) };
 /** The closing answer, a word more in each live event. */
 const answer =
 	"The suite passes now. The retry in `src/probe.ts` waits `backoff(attempt)` instead of a fixed second, so a failing probe tries again after 100 ms, then 200 ms, 400 ms and so on, up to 5 s.\n\n" +
@@ -118,10 +120,13 @@ const scenario = {
 		wake: null,
 		nodes: [],
 		projects: [],
-		preview: { pylon: "py-demo", service: "port-8080", httpsPort: 8444, ready: true, url: `${host}:8444/` },
+		preview: own,
+		unpreview: null,
 	},
-	// Long enough to capture the port opening.
-	delayMs: { preview: 30_000 },
+	// The details list port 8080's preview once it opens, and stop listing it once it is unpublished.
+	after: { preview: { show: opened }, unpreview: { show: detail } },
+	// Long enough to capture the port opening and closing.
+	delayMs: { preview: 30_000, unpreview: 30_000 },
 	watch,
 	watchHold: true,
 };

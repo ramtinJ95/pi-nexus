@@ -56,6 +56,14 @@ describe("/nexus arguments", () => {
 		expect(parseCommand("unfollow")).toEqual({ name: "unfollow" });
 	});
 
+	test("unpublish takes a thread and a port", () => {
+		expect(parseCommand("unpublish 0123 8080")).toEqual({ name: "unpublish", thread: "0123", port: 8080 });
+		expect(invalid("unpublish 0123")).toStartWith("unpublish needs a port\n/nexus");
+		expect(invalid("unpublish 0123 http")).toStartWith("unpublish needs a port from 1 to 65535, got http");
+		expect(invalid("unpublish 0123 0")).toStartWith("unpublish needs a port from 1 to 65535, got 0");
+		expect(invalid("unpublish 0123 8080 9000")).toStartWith("unpublish takes 2 arguments");
+	});
+
 	test("mistakes name the problem and show usage", () => {
 		expect(invalid("new acme --title")).toStartWith("new needs a title after --title\n/nexus");
 		expect(invalid("open")).toStartWith("open needs a thread");
@@ -75,6 +83,7 @@ describe("/nexus completion", () => {
 	test("completes thread IDs, with or without th-", () => {
 		expect(complete("show 0123", threads)?.map((i) => i.value)).toEqual([`show ${idA}`, `show ${idB}`]);
 		expect(complete("show th-0123456789c", threads)?.map((i) => i.value)).toEqual([`show ${idB}`]);
+		expect(complete("unpublish 0123456789c", threads)?.map((i) => i.value)).toEqual([`unpublish ${idB}`]);
 		expect(complete("list a", threads)).toBeNull();
 	});
 });

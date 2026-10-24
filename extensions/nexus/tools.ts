@@ -5,7 +5,7 @@
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema, type Static } from "typebox";
-import { listThreads, previewPort, readThread, sendText, startThread, threadId, waitThread, type Nexus } from "./cli.ts";
+import { listThreads, previewPort, readThread, sendText, startThread, threadId, unpreviewPort, waitThread, type Nexus } from "./cli.ts";
 import type { ListeningPort, ThreadState } from "./contract.ts";
 import { ago, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
 
@@ -164,7 +164,7 @@ export function nexusTools(nexus: Nexus) {
 				name: "nexus_preview",
 				label: "Nexus preview",
 				description:
-					"Publish a port the thread's pylon listens on as a preview, open to the home tailnet for the thread's life, and return its URL once it is served (up to 2 min).",
+					"Publish a port the thread's pylon listens on as a preview, open to the home tailnet until unpublished, and return its URL once it is served (up to 2 min).",
 				parameters: Type.Object({ thread: threadParam, port: Type.Integer({ minimum: 1, maximum: 65535 }) }, { additionalProperties: false }),
 			},
 			async (params, signal) => {
@@ -175,6 +175,26 @@ export function nexusTools(nexus: Nexus) {
 					return { thread, port: params.port, url: preview.url, ready: preview.ready };
 				} catch (err) {
 					if (signal?.aborted) throw new Error("nexus: cancelled while waiting for the preview; the port may be published already");
+					throw err;
+				}
+			},
+		),
+		jsonTool(
+			{
+				name: "nexus_unpublish",
+				label: "Nexus unpublish",
+				description:
+					"Close the preview a port of a Nexus thread was published as. A declared service's preview cannot be closed. Publishing the port again may give it a new URL. Wakes a paused pylon first (up to 2 min).",
+				parameters: Type.Object({ thread: threadParam, port: Type.Integer({ minimum: 1, maximum: 65535 }) }, { additionalProperties: false }),
+			},
+			async (params, signal) => {
+				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
+				if (signal?.aborted) throw new Error("nexus: cancelled before the preview was closed");
+				try {
+					await unpreviewPort(nexus, thread, params.port, signal);
+					return { thread, port: params.port, unpublished: true };
+				} catch (err) {
+					if (signal?.aborted) throw new Error("nexus: cancelled while closing the preview; it may be closed already");
 					throw err;
 				}
 			},

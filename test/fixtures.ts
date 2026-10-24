@@ -54,6 +54,8 @@ export const state = (thread: string, s: ThreadState): WatchEvent => ({ type: "s
 
 export interface Scenario {
 	responses?: Record<string, unknown>;
+	/** Replies that replace `responses` once the command they are under has answered. */
+	after?: Record<string, Record<string, unknown>>;
 	fail?: Record<string, { exit: number; kind?: string; error?: string; stderr?: string }>;
 	watch?: { event: WatchEvent | string; delayMs?: number }[];
 	watchHold?: boolean;

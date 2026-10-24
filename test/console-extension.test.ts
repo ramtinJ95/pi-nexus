@@ -17,6 +17,10 @@ const scenario: Scenario = {
 	watchHold: true,
 };
 
+/** The detail with port 8080 published on its own, beside the web service's preview. */
+const own = { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" };
+const published = { ...detail, previews: [...detail.previews, own], ports: detail.ports!.map((p) => (p.port === 8080 ? { ...p, preview: own } : p)) };
+
 interface Shown {
 	component: Component;
 	options: unknown;
@@ -71,7 +75,7 @@ function load(s: Scenario, { custom = true } = {}) {
 		for (const ch of input) shown[i]!.component.handleInput!(ch);
 		shown[i]!.component.handleInput!("\r");
 	};
-	return { run: (args: string) => command!(args, ctx), calls: fake.calls, notes, notified, shown, until, text, type };
+	return { run: (args: string) => command!(args, ctx), bin: fake.bin, calls: fake.calls, notes, notified, shown, until, text, type };
 }
 
 describe("console", () => {
@@ -120,6 +124,82 @@ describe("console", () => {
 		await n.until(() => n.text().includes(`Port 8080 is open at ${url}`), "the preview");
 		expect(n.calls()).toContainEqual(["preview", "--json", idA, "8080", "--wait"]);
 		await n.until(() => shows() > before, "a refreshed detail");
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("/unpublish runs nexus unpreview, shows the preview closing, then the port under Ports", async () => {
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null }, after: { unpreview: { show: detail } }, delayMs: { unpreview: 500 } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		n.type("/info");
+		expect(n.text()).toContain("/unpublish 8080 closes it");
+		n.type("/unpublish 8080");
+		await n.until(() => n.text().includes("● port-8080 closing..."), "the preview closing");
+		await n.until(() => n.text().includes("Port 8080 is unpublished."), "the unpublish");
+		expect(n.calls()).toContainEqual(["unpreview", "--json", idA, "8080"]);
+		expect(n.text()).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
+		expect(n.text()).not.toContain("port-8080");
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("details read right after /open show another client's unpublish at once", async () => {
+		// Another client unpublishes port 8080 as soon as it is published, so every show lists it with no preview.
+		const n = load({ ...scenario, responses: { ...scenario.responses, preview: { ...own, pylon: "py-0123", httpsPort: 8445 } } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("1 preview"), "the thread view");
+		n.type("/info");
+		n.type("/open 8080");
+		await n.until(() => n.text().includes("Port 8080 is open at"), "the preview");
+		await n.until(() => /Ports 1\n +● 8080  no preview yet\./.test(n.text()), "the port back under Ports");
+		expect(n.text()).not.toContain("port-8080");
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("details read right after /unpublish show another client's republish at once", async () => {
+		// Another client publishes port 8080 again as soon as it is unpublished, so every show lists its preview.
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		n.type("/info");
+		n.type("/unpublish 8080");
+		await n.until(() => n.text().includes("Port 8080 is unpublished."), "the unpublish");
+		await n.until(() => /● port-8080\n/.test(n.text()), "the preview back under Previews");
+		expect(n.text()).toMatch(/Ports 0\n/);
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("leaving the view mid-unpublish stops its CLI, so reopening offers the port afresh with nothing pending", async () => {
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null }, after: { unpreview: { show: detail } }, delayMs: { unpreview: 1_500 } });
+		const first = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		n.type("/info");
+		n.type("/unpublish 8080");
+		await n.until(() => n.calls().some((c) => c[0] === "unpreview") && n.text().includes("closing..."), "the unpublish to start");
+		// The first Esc closes the inspector, the second the view.
+		n.shown[0]!.component.handleInput!("\x1b");
+		n.shown[0]!.component.handleInput!("\x1b");
+		await first;
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 2 && n.text().includes("2 previews"), "the view again");
+		n.type("/info");
+		expect(n.text()).toContain("/unpublish 8080 closes it");
+		expect(n.text()).not.toContain("closing...");
+		// Past the old unpreview's delay. Had it run on, it would have answered, and the fake would list the port
+		// unpublished from then on.
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		expect((await showThread(createNexus(n.bin), idA)).previews.map((p) => p.service)).toContain("port-8080");
+		expect(n.text()).not.toContain("is unpublished");
+		n.shown[1]!.done({ kind: "close" });
+	}, 10_000);
+
+	test("/unpublish on a CLI without unpreview says to update it", async () => {
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: published }, fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		n.type("/info");
+		n.type("/unpublish 8080");
+		await n.until(() => n.text().includes("did not close. /unpublish 8080 tries again"), "the failure");
+		expect(n.text().replace(/\s+/g, " ")).toContain("nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
 		n.shown[0]!.done({ kind: "close" });
 	});
 

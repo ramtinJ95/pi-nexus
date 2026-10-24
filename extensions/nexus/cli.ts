@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { NodeSummary, parse, Preview, Project, Thread, ThreadDetail, ThreadRow, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { NodeSummary, parse, Preview, Project, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -130,6 +130,21 @@ export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSig
  */
 export const previewPort = async (nexus: Nexus, thread: string, port: number, signal?: AbortSignal) =>
 	parse(Preview, await nexus.run(["preview", thread, String(port), "--wait"], signal), "nexus preview");
+/**
+ * Unpublishes the preview of `port`, which a port with none already is. A paused pylon is woken first, so it can take
+ * up to the CLI's two minutes. An abort ends the wait, but the preview may be gone by then. The CLI refuses a
+ * declared or ad hoc service's preview.
+ */
+export async function unpreviewPort(nexus: Nexus, thread: string, port: number, signal?: AbortSignal): Promise<void> {
+	try {
+		parse(Unpreviewed, await nexus.run(["unpreview", thread, String(port)], signal), "nexus unpreview");
+	} catch (err) {
+		if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command unpreview") {
+			throw new NexusError("invalid", "nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
+		}
+		throw err;
+	}
+}
 export const listProjects = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(Project), await nexus.run(["projects"], signal), "nexus projects");
 export const listNodes = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(NodeSummary), await nexus.run(["nodes"], signal), "nexus nodes");
 

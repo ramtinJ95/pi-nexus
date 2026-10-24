@@ -28,7 +28,7 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 
 describe("model tools", () => {
 	test("the model gets no delete or retry", () => {
-		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
+		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
 	});
 
 	test("nexus_threads lists threads of a project", async () => {
@@ -124,6 +124,38 @@ describe("model tools", () => {
 		setTimeout(() => waiting.abort(), 300);
 		expect(await failure(during.call("nexus_preview", { thread: idA, port: 8080 }, waiting.signal))).toBe(
 			"nexus: cancelled while waiting for the preview; the port may be published already",
+		);
+	});
+
+	test("nexus_unpublish unpublishes the port's preview", async () => {
+		const { call, calls } = setup({ responses: { unpreview: null } });
+		expect(await call("nexus_unpublish", { thread: idA, port: 8080 })).toEqual({ thread: idA, port: 8080, unpublished: true });
+		expect(calls()).toEqual([["unpreview", "--json", idA, "8080"]]);
+	});
+
+	test("nexus_unpublish fails with the CLI's refusal, on a reply other than null, and on a CLI without unpreview", async () => {
+		const refused = setup({ fail: { unpreview: { exit: 1, kind: "failed", error: "port 5173 is previewed by the service web, which keeps its preview" } } });
+		expect(await failure(refused.call("nexus_unpublish", { thread: idA, port: 5173 }))).toBe("nexus (failed): port 5173 is previewed by the service web, which keeps its preview");
+		const odd = setup({ responses: { unpreview: { ok: true } } });
+		expect(await failure(odd.call("nexus_unpublish", { thread: idA, port: 8080 }))).toStartWith("nexus (contract): nexus unpreview breaks the contract");
+		// What CLI 0.2.0 prints for a command it does not have.
+		const old = setup({ fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
+		expect(await failure(old.call("nexus_unpublish", { thread: idA, port: 8080 }))).toBe(
+			"nexus (invalid): nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)",
+		);
+	});
+
+	test("nexus_unpublish says whether a cancel came before the preview was closed", async () => {
+		const before = setup({ responses: { threads } });
+		const stop = new AbortController();
+		stop.abort();
+		expect(await failure(before.call("nexus_unpublish", { thread: idA, port: 8080 }, stop.signal))).toBe("nexus: cancelled before the preview was closed");
+		expect(before.calls()).toEqual([]);
+		const during = setup({ responses: { unpreview: null }, delayMs: { unpreview: 5_000 } });
+		const waiting = new AbortController();
+		setTimeout(() => waiting.abort(), 300);
+		expect(await failure(during.call("nexus_unpublish", { thread: idA, port: 8080 }, waiting.signal))).toBe(
+			"nexus: cancelled while closing the preview; it may be closed already",
 		);
 	});
 
