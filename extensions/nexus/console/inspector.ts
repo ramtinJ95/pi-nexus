@@ -103,16 +103,17 @@ export function portLines(
 	if (previews.length === 0) lines.push(`   ${t.fg("dim", "No previews.")}`);
 	for (const { preview: p, port, i } of previews) {
 		row(i, () => {
-			const look = previewLook(detail, p.ready);
+			const look = previewLook(detail, p);
 			// Only a port's own preview can be unpublished; the CLI refuses a service's.
 			const linked = linkedPort(p.service);
 			const change = port === undefined ? noChange : (changes.get(port) ?? noChange);
 			const closing = change.pending === "close";
 			const named = port !== undefined && linked === undefined ? t.fg("muted", `  port ${port}`) : "";
 			const label = closing ? "closing..." : look.label;
-			lines.push(`${mark(i)}${w.dot(closing ? "busy" : look.tone)} ${p.service}${label === null ? "" : t.fg("muted", ` ${label}`)}${named}`);
+			const tone = closing ? "busy" : look.tone;
+			lines.push(`${mark(i)}${w.dot(tone)} ${p.service}${label === null ? "" : t.fg(tone === "bad" ? "error" : "muted", ` ${label}`)}${named}`);
 			lines.push(`     ${look.linked ? link(p.url) : t.fg("dim", p.url)}`);
-			if (look.hint !== null) lines.push(`     ${t.fg("dim", look.hint)}`);
+			if (look.hint !== null) w.wrapped(look.hint, "dim", 5);
 			if (closing) lines.push(`     ${t.fg("muted", "Unpublishing it. A paused pylon wakes first, which can take a while.")}`);
 			else if (change.failure?.action === "close") {
 				lines.push(`     ${t.fg("muted", linked === undefined ? "did not close." : `did not close. ${x(i, `/unpublish ${port}`)} tries again`)}`);
@@ -120,7 +121,7 @@ export function portLines(
 			} else if (linked !== undefined && canRun && change.pending === null) lines.push(`     ${t.fg("dim", `${x(i, `/unpublish ${linked}`)} closes it`)}`);
 		});
 	}
-	if (previews.some((p) => previewLook(detail, p.preview.ready).linked)) {
+	if (previews.some((p) => previewLook(detail, p.preview).linked)) {
 		lines.push(`     ${t.fg("dim", "Click a link to open it, or copy it with y or /copy <port or service>.")}`);
 	}
 

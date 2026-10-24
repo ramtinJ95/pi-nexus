@@ -494,6 +494,22 @@ describe("thread view", () => {
 		expect(s.text()).toMatch(/→ ● web/);
 	});
 
+	test("a preview whose service failed shows failed in red, with why and no link", () => {
+		const why = "the service web failed. `nexus service logs web` in the pylon shows why";
+		const failed = { ...webPreview, ready: false, failed: why };
+		const s = open();
+		s.details({ ...detail, previews: [failed], ports: [{ port: 5173, service: "web", preview: failed }, ports[1]!] });
+		s.normal("3");
+		const out = plain(s.screen.render(60));
+		expect(out).toContain(
+			"Previews 1\n → ● web failed  port 5173\n     https://firebat.example.ts.net:8443/\n     the service web failed. `nexus service logs web` in\n     the pylon shows why\n",
+		);
+		const raw = s.screen.render(60).join("\n");
+		expect(raw).toContain(piTheme().fg("error", " failed"));
+		expect(raw).not.toContain("\x1b]8;;https://firebat.example.ts.net:8443/");
+		expect(out).not.toContain("Click a link");
+	});
+
 	test("the ports section says why it lists nothing, and names a service's port", () => {
 		const inspect = (d: ThreadDetail) => {
 			const s = open();

@@ -215,10 +215,16 @@ describe("run and composer", () => {
 
 describe("previews and starting", () => {
 	test("a paused pylon's preview keeps its link and an archived thread's does not", () => {
-		expect(previewLook(detail, true)).toEqual({ linked: true, label: null, tone: "ok", hint: null });
-		expect(previewLook(detail, false)).toMatchObject({ linked: false, label: "starting" });
-		expect(previewLook({ ...detail, pylon: { ...detail.pylon, actualState: "paused" } }, true)).toMatchObject({ linked: true, hint: "Opening it wakes the pylon." });
-		expect(previewLook({ ...detail, thread: { ...detail.thread, status: "archived" } }, true)).toMatchObject({ linked: false });
+		const ready = { ready: true };
+		expect(previewLook(detail, ready)).toEqual({ linked: true, label: null, tone: "ok", hint: null });
+		expect(previewLook(detail, { ready: false, failed: null })).toMatchObject({ linked: false, label: "starting" });
+		expect(previewLook({ ...detail, pylon: { ...detail.pylon, actualState: "paused" } }, ready)).toMatchObject({ linked: true, hint: "Opening it wakes the pylon." });
+		expect(previewLook({ ...detail, thread: { ...detail.thread, status: "archived" } }, ready)).toMatchObject({ linked: false });
+	});
+
+	test("a preview whose service failed has no link, and says why", () => {
+		const why = "the service web failed. `nexus service logs web` in the pylon shows why";
+		expect(previewLook(detail, { ready: false, failed: why })).toEqual({ linked: false, label: "failed", tone: "bad", hint: why });
 	});
 
 	test("empty optional fields are left to the project's defaults", () => {

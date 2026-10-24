@@ -46,8 +46,13 @@ export type ThreadRow = Static<typeof ThreadRow>;
 export const Preview = Type.Object({
 	/** The service it previews: a declared or ad hoc one, or `port-<port>` for a port previewed on its own. */
 	service: Type.String(),
-	/** The node publishes it and has warmed its URL. It says nothing about the pylon answering. */
+	/** The node publishes it and has warmed its URL, and `failed` is null. It says nothing else about the pylon answering. */
 	ready: Type.Boolean(),
+	/**
+	 * Why it cannot answer: the pylon's node last reported its service failed. Null otherwise, and absent from a control
+	 * plane older than the field, which means null too.
+	 */
+	failed: Type.Optional(Nullable(Type.String())),
 	url: Type.String(),
 });
 export type Preview = Static<typeof Preview>;
