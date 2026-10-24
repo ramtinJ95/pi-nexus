@@ -93,6 +93,7 @@ export const ThreadDetail = Type.Object({
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 
+/** A project as `projects` lists it and `project add` prints the one it added. */
 export const Project = Type.Object({ id: Type.String(), repoUrl: Type.String(), defaultNode: Type.String(), defaultBranch: Type.String() });
 export type Project = Static<typeof Project>;
 

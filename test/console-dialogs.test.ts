@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Picker, type PickerEnd } from "../extensions/nexus/console/picker.ts";
+import { ProjectFormView, type ProjectForm } from "../extensions/nexus/console/project-form.ts";
+import { ProjectPicker, type ProjectEnd } from "../extensions/nexus/console/project-picker.ts";
 import { StartFormView } from "../extensions/nexus/console/start-form.ts";
 import type { StartForm } from "../extensions/nexus/console/model.ts";
 import { asked, fakeTui, keybindings, piTheme, plain } from "./console-fixture.ts";
 import type { ThreadRow } from "../extensions/nexus/contract.ts";
 import type { Seen } from "../extensions/nexus/store.ts";
+import { NexusError } from "../extensions/nexus/thread.ts";
 import { idA, idB, idC, row } from "./fixtures.ts";
 
 const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", up: "\x1b[A", right: "\x1b[C", tab: "\t", ctrlN: "\x0e" };
@@ -20,11 +23,11 @@ describe("picker", () => {
 		row(idC, { project: "nexus", title: "Old work", status: "archived", desired: "deleted", pylon: { node: "firebat", actualState: "absent", failed: null } }),
 	];
 
-	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads, parked = new Map<string, number>()) {
+	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads, parked = new Map<string, number>(), scope: string | null = null) {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000);
 		picker.focused = true;
-		picker.setThreads(list, projects, { seen, parked });
+		picker.setThreads(list, projects, { seen, parked }, scope);
 		const press = (...input: string[]) => input.forEach((k) => picker.handleInput(k));
 		return { picker, ends, text: () => plain(picker.render(width)), press };
 	}
@@ -126,7 +129,7 @@ describe("picker", () => {
 	test("s lists the keys too, and r reads the threads again", () => {
 		let reads = 0;
 		const picker = new Picker(fakeTui(), piTheme(), () => {}, () => asked + 60_000, undefined, () => reads++);
-		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() });
+		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() }, null);
 		picker.handleInput("s");
 		expect(plain(picker.render(140))).toContain("read the threads again");
 		picker.handleInput("j");
@@ -172,9 +175,25 @@ describe("picker", () => {
 	test("opens on the thread it is given, once the threads load", () => {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000, idB);
-		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() });
+		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() }, null);
 		picker.handleInput(keys.enter);
 		expect(ends).toEqual([{ kind: "open", thread: idB }]);
+	});
+
+	test("a project scope shows only that project's threads and names it in the header, and p asks for another", () => {
+		const list = [...threads, row("th-5173aaaabbbb", { project: "site", title: "Landing page" })];
+		const all = open(140, undefined, list).text();
+		expect(all).toContain("Nexus threads · All projects");
+		expect(all).toContain("Fix the probe retry");
+		expect(all).toContain("Landing page");
+		const site = open(140, undefined, list, undefined, "site");
+		expect(site.text()).toContain("Nexus threads · site");
+		expect(site.text()).toContain("Landing page");
+		expect(site.text()).not.toContain("Fix the probe retry");
+		expect(site.text()).not.toMatch(/nexus 2\n/);
+		expect(site.text()).toContain("p project");
+		site.press("p");
+		expect(site.ends).toEqual([{ kind: "projects" }]);
 	});
 
 	test("a failed read shows, and the threads it had stay", () => {
@@ -182,6 +201,169 @@ describe("picker", () => {
 		p.picker.setError("The threads could not be read: unreachable");
 		expect(p.text()).toContain("The threads could not be read: unreachable");
 		expect(p.text()).toContain("Fix the probe retry");
+	});
+});
+
+describe("project picker", () => {
+	function open(current: string | null = null, loaded = true) {
+		const ends: ProjectEnd[] = [];
+		const picker = new ProjectPicker(fakeTui(), piTheme(), (end) => ends.push(end), current);
+		picker.focused = true;
+		if (loaded) picker.setProjects(projects);
+		const press = (...input: string[]) => input.forEach((k) => picker.handleInput(k));
+		return { picker, ends, text: () => plain(picker.render(100)), press };
+	}
+
+	test("lists All projects, each project with its repo URL, then New project, the current scope selected", () => {
+		const out = open().text();
+		expect(out).toContain("Projects");
+		expect(out).toMatch(/→ All projects +current\n/);
+		expect(out).toMatch(/ {3}nexus +git@example\.com:nexus\n/);
+		expect(out).toMatch(/ {3}site +git@example\.com:site\n/);
+		expect(out).toContain("+ New project…");
+		expect(open("site").text()).toMatch(/→ site +git@example\.com:site +current\n/);
+	});
+
+	test("j and k move, gg and ge jump, Enter or o chooses, and q or Esc cancels", () => {
+		const p = open();
+		p.press("j", "\r");
+		expect(p.ends).toEqual([{ kind: "scope", project: "nexus" }]);
+		const q = open("site");
+		q.press("k", "k", "o");
+		expect(q.ends).toEqual([{ kind: "scope", project: null }]);
+		const r = open();
+		r.press("g", "e", "\r");
+		expect(r.ends).toEqual([{ kind: "new" }]);
+		const s = open("site");
+		s.press("g", "g", keys.down, "o");
+		expect(s.ends).toEqual([{ kind: "scope", project: "nexus" }]);
+		const t = open();
+		t.press("G", "k", "\r");
+		expect(t.ends).toEqual([{ kind: "scope", project: "site" }]);
+		const u = open();
+		u.press("q");
+		const v = open();
+		v.press(keys.escape);
+		expect([...u.ends, ...v.ends]).toEqual([{ kind: "cancel" }, { kind: "cancel" }]);
+	});
+
+	test("before the projects load, and when they cannot be read, All projects and New project still work", () => {
+		const p = open("site", false);
+		expect(p.text()).toContain("Reading the projects...");
+		p.picker.setError("The projects could not be read: unreachable");
+		expect(p.text()).toContain("The projects could not be read: unreachable");
+		p.press("G", "\r");
+		expect(p.ends).toEqual([{ kind: "new" }]);
+	});
+});
+
+describe("new project form", () => {
+	const nodes = [
+		{ name: "nuc", state: "offline" as const },
+		{ name: "firebat", state: "online" as const },
+	];
+	function open(available: ConstructorParameters<typeof ProjectFormView>[0]["nodes"] = nodes, fail?: Error) {
+		const added: ProjectForm[] = [];
+		let cancelled = 0;
+		const form = new ProjectFormView({
+			tui: fakeTui(),
+			theme: piTheme(),
+			nodes: available,
+			async add(f) {
+				added.push(f);
+				if (fail) throw fail;
+			},
+			cancel: () => cancelled++,
+		});
+		form.focused = true;
+		const press = (...input: string[]) => input.forEach((k) => form.handleInput(k));
+		const type = (text: string) => press(...text);
+		return { form, added, cancelled: () => cancelled, text: () => plain(form.render(100)), press, type };
+	}
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	test("defaults to the first online node and the main branch", () => {
+		const out = open().text();
+		expect(out).toContain("Add a project");
+		expect(out).toContain("[firebat]");
+		expect(out).toContain("nuc, offline");
+		expect(out).toMatch(/Branch +> main\n/);
+	});
+
+	test("Enter moves to the next field and adds from the last, with what each field holds", async () => {
+		const f = open();
+		f.type("spoon");
+		f.press(keys.enter);
+		f.type("git@github.com:me/spoon.git");
+		f.press(keys.enter);
+		f.press(keys.right, keys.enter);
+		expect(f.added).toEqual([]);
+		f.type("trunk");
+		f.press(keys.enter);
+		await settle();
+		expect(f.added).toEqual([{ id: "spoon", repoUrl: "git@github.com:me/spoon.git", node: "nuc", branch: "trunk" }]);
+	});
+
+	test("a failed add shows the CLI's message as it is, and keeps the fields", async () => {
+		for (const message of ["project spoon already exists", "invalid project id Spoon!: use lowercase letters, digits and dashes"]) {
+			const f = open(nodes, new NexusError(message.startsWith("invalid") ? "invalid" : "conflict", message));
+			f.type("spoon");
+			f.press(keys.tab);
+			f.type("git@github.com:me/spoon.git");
+			f.press(keys.tab, keys.tab, keys.enter);
+			await settle();
+			expect(f.added).toEqual([{ id: "spoon", repoUrl: "git@github.com:me/spoon.git", node: "firebat", branch: "main" }]);
+			expect(f.text()).toContain(message);
+			expect(f.text()).toContain("git@github.com:me/spoon.git");
+			f.press(keys.enter);
+			await settle();
+			expect(f.added).toHaveLength(2);
+		}
+	});
+
+	test("needs an ID, a repo URL and a node", async () => {
+		const f = open();
+		f.press(keys.tab, keys.tab, keys.tab, keys.enter);
+		await settle();
+		expect(f.text()).toContain("A project needs an ID.");
+		f.press(keys.tab);
+		f.type("spoon");
+		f.press(keys.tab, keys.tab, keys.tab, keys.enter);
+		await settle();
+		expect(f.text()).toContain("A project needs a repo URL.");
+		const g = open(new Error("unreachable"));
+		expect(g.text()).toContain("The nodes could not be read, so there is no node to add the project on: unreachable");
+		g.type("spoon");
+		g.press(keys.tab);
+		g.type("git@x:spoon");
+		g.press(keys.tab, keys.tab, keys.enter);
+		await settle();
+		expect(g.added).toEqual([]);
+		expect(open([]).text()).toContain("No nodes yet, so there is no node to add the project on.");
+		expect(f.added).toEqual([]);
+	});
+
+	test("Esc cancels, but waits for an add under way", async () => {
+		const f = open();
+		f.press(keys.escape);
+		expect(f.cancelled()).toBe(1);
+		let finish = () => {};
+		let cancelled = 0;
+		const form = new ProjectFormView({ tui: fakeTui(), theme: piTheme(), nodes, add: () => new Promise<void>((resolve) => (finish = resolve)), cancel: () => cancelled++ });
+		form.focused = true;
+		for (const ch of "spoon") form.handleInput(ch);
+		form.handleInput(keys.tab);
+		for (const ch of "git@x:spoon") form.handleInput(ch);
+		form.handleInput(keys.tab);
+		form.handleInput(keys.tab);
+		form.handleInput(keys.enter);
+		form.handleInput(keys.escape);
+		expect(cancelled).toBe(0);
+		expect(plain(form.render(100))).toContain("Adding the project. Esc closes the form once the CLI answers.");
+		finish();
+		await settle();
+		form.handleInput(keys.escape);
+		expect(cancelled).toBe(1);
 	});
 });
 

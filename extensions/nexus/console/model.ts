@@ -126,12 +126,19 @@ export function attention(t: ThreadRow, { seen, parked }: Marks): Attention {
 	return t.lastAgentActivityAt > (seen.threads[t.id] ?? seen.since) ? "new" : null;
 }
 
-/** The status line's summary, such as `nexus 2 working · 1 needs you · 3 new`. The counts other than working show when not zero. */
-export function summary(threads: readonly ThreadRow[], marks: Marks): string {
+/**
+ * The status line's summary of the threads in scope, such as `nexus 2 working · 1 needs you · 3 new`, or
+ * `nexus spoon · 1 working` for one project. The counts other than working show when not zero.
+ */
+export function summary(threads: readonly ThreadRow[], marks: Marks, project: string | null = null): string {
 	const count = (a: Attention) => threads.filter((t) => attention(t, marks) === a).length;
 	const needs = count("needs-you");
 	const fresh = count("new");
-	return [`nexus ${workingCount(threads)} working`, ...(needs > 0 ? [`${needs} needs you`] : []), ...(fresh > 0 ? [`${fresh} new`] : [])].join(" · ");
+	return [
+		`nexus ${project === null ? "" : `${project} · `}${workingCount(threads)} working`,
+		...(needs > 0 ? [`${needs} needs you`] : []),
+		...(fresh > 0 ? [`${fresh} new`] : []),
+	].join(" · ");
 }
 
 /** A thread in the strip above pi's editor: one that needs you, has news, or works, in that order. */

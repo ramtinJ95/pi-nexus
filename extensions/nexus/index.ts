@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createNexus, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
+import { addProject, createNexus, listProjects, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
 import { chips, noteParked, summary, type Parked } from "./console/model.ts";
@@ -10,6 +10,7 @@ import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
 import type { ThreadRow } from "./contract.ts";
 import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
+import { inScope, Scope } from "./scope.ts";
 import { defaultSettingsFile, defaultViewedFile, settingsFile, viewedFile, type SettingsStore, type Viewed } from "./store.ts";
 
 const statusEveryMs = 30_000;
@@ -26,8 +27,8 @@ const ends: Readonly<Record<FollowEnd, string>> = {
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
- * One pi session's Nexus state: the follows it runs, and the status line and strip, which poll the threads from the
- * session's start while the strip setting is on. `/nexus strip off` stops the polling, so a session that does not
+ * One pi session's Nexus state: the follows it runs, the project it shows, and the status line and strip, which poll
+ * the threads from the session's start while the strip setting is on. `/nexus strip off` stops the polling, so a session that does not
  * want the summary never polls. Every CLI process the session starts ends with it, since pi replaces the extension
  * runtime after a shutdown.
  */
@@ -47,6 +48,7 @@ class NexusSession {
 	private readonly console: Console;
 	private readonly viewed: Viewed;
 	private readonly settings: SettingsStore;
+	private readonly scope: Scope;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
@@ -56,7 +58,8 @@ class NexusSession {
 	) {
 		({ viewed: this.viewed, settings: this.settings } = stores);
 		this.strip = this.settings.read().strip;
-		this.console = new Console(nexus, this.closed.signal, this.viewed, this.parked, (message) => this.ui?.notify(message, "warning"), display);
+		this.scope = new Scope(this.settings, (message, level) => this.ui?.notify(message, level), () => this.show());
+		this.console = new Console(nexus, this.closed.signal, this.viewed, this.parked, this.scope, (message) => this.ui?.notify(message, "warning"), display);
 	}
 
 	/** Takes the session's UI, and polls the threads while the strip setting is on. */
@@ -68,10 +71,20 @@ class NexusSession {
 		this.timer = setInterval(() => void this.refresh(), statusEveryMs).unref();
 	}
 
-	/** The session's start, where the summary and strip show at once rather than on the first poll. */
+	/**
+	 * The session's start, where the summary and strip show at once rather than on the first poll. They count only the
+	 * project shown, so a project that no longer exists goes back to every project now, not when the picker opens.
+	 */
 	start(ui: ExtensionUIContext): void {
 		this.attach(ui);
-		if (this.strip) void this.refresh();
+		if (!this.strip) return;
+		void this.refresh();
+		if (this.scope.project !== null) {
+			listProjects(this.nexus, this.closed.signal).then(
+				(projects) => this.scope.check(projects),
+				() => {},
+			);
+		}
 	}
 
 	/** Ends the polling, and the poll in flight with it, so no reply lands after the strip turned off. */
@@ -101,14 +114,22 @@ class NexusSession {
 				this.viewed.prune(new Set(this.threads.map((t) => t.id)), listedAt);
 			} catch {}
 			if (polling === undefined || signal.aborted) return;
-			const marks = { seen: this.viewed.read(), parked: this.parked };
-			this.ui?.setStatus("nexus", summary(this.threads, marks));
-			const shown = chips(this.threads, marks);
-			const now = Date.now();
-			this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now) : undefined);
+			this.show();
 		} catch (err) {
 			if (polling !== undefined && !signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
 		}
+	}
+
+	/** Shows the summary and the strip of the threads last listed in the project shown, while the session polls. */
+	private show(): void {
+		if (this.polling === undefined) return;
+		const project = this.scope.project;
+		const threads = inScope(this.threads, project);
+		const marks = { seen: this.viewed.read(), parked: this.parked };
+		this.ui?.setStatus("nexus", summary(threads, marks, project));
+		const shown = chips(threads, marks);
+		const now = Date.now();
+		this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now, project) : undefined);
 	}
 
 	private note(note: Note): void {
@@ -215,13 +236,38 @@ class NexusSession {
 			case "strip":
 				this.strip = command.on;
 				try {
-					this.settings.write({ ...this.settings.read(), strip: command.on });
+					this.settings.update({ strip: command.on });
 				} catch (err) {
 					ctx.ui.notify(`The strip is ${command.on ? "on" : "off"} for this session only, since its setting could not be saved: ${errorText(err)}`, "warning");
 				}
 				if (!command.on) return this.stopPolling();
 				this.attach(ctx.ui);
 				return this.refresh();
+			case "scope": {
+				if (command.project === undefined) {
+					const shown = this.scope.project;
+					return ctx.ui.notify(shown === null ? "Nexus shows every project. /nexus project <id> shows one." : `Nexus shows the project ${shown}. /nexus project all shows every project.`, "info");
+				}
+				if (command.project === null) {
+					this.scope.set(null);
+					return ctx.ui.notify("Nexus shows every project.", "info");
+				}
+				const wanted = command.project;
+				const projects = await listProjects(nexus, signal);
+				if (!projects.some((p) => p.id === wanted)) {
+					const known = projects.map((p) => p.id);
+					const list = known.length === 0 ? "There are none yet" : `The projects are ${known.length === 1 ? known[0] : `${known.slice(0, -1).join(", ")} and ${known.at(-1)}`}`;
+					throw new NexusError("not-found", `there is no project ${wanted}. ${list}`);
+				}
+				this.scope.set(wanted);
+				return ctx.ui.notify(`Nexus shows the project ${wanted}.`, "info");
+			}
+			case "add-project": {
+				const { name: _name, ...add } = command;
+				const project = await addProject(nexus, add, signal);
+				this.scope.set(project.id);
+				return ctx.ui.notify(`Added the project ${project.id} (${project.repoUrl}) on ${project.defaultNode}. Nexus shows its threads.`, "info");
+			}
 			case "unpublish": {
 				const thread = await id(command.thread);
 				await unpreviewPort(nexus, thread, command.port, signal);

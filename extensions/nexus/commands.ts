@@ -23,6 +23,9 @@ export type NexusCommand =
 	| { name: "unfollow"; thread?: string }
 	| { name: "unpublish"; thread: string; port: number }
 	| { name: "strip"; on: boolean }
+	/** `project` undefined shows the scope, and null is every project. */
+	| { name: "scope"; project?: string | null }
+	| { name: "add-project"; id: string; repoUrl: string; node: string; branch?: string }
 	| { name: Action; thread: string }
 	| { name: "help" };
 
@@ -39,9 +42,11 @@ export const usage = `/nexus                              the working thread ove
 /nexus archive|unarchive|retry|retry-pylon|abort <thread>
 /nexus delete <thread>               asks first
 /nexus strip on|off                  the threads that need you, have news or work, above the editor
+/nexus project [id|all]              which project's threads show, or the one shown
+/nexus project add <id> <repo-url> --node <node> [--branch <branch>]
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
-const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", "strip", ...Object.keys(actions), "help"];
+const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", "strip", "project", ...Object.keys(actions), "help"];
 
 interface Token {
 	value: string;
@@ -113,6 +118,10 @@ export function parseCommand(input: string): NexusCommand {
 			only(1);
 			if (args[0] !== "on" && args[0] !== "off") throw invalid("strip needs on or off");
 			return { name, on: args[0] === "on" };
+		case "project":
+			if (args[0] === "add") return addProject(args.slice(1));
+			if (args.length > 1) throw invalid("project takes one argument, or add");
+			return args[0] === undefined ? { name: "scope" } : { name: "scope", project: args[0] === "all" ? null : args[0] };
 		case "help":
 			return { name };
 		case "open":
@@ -127,9 +136,31 @@ export function parseCommand(input: string): NexusCommand {
 	}
 }
 
+/** `project add`'s arguments: an ID and a repo URL, and --node and --branch, as `--flag value` or `--flag=value`. */
+function addProject(args: readonly string[]): NexusCommand {
+	const positional: string[] = [];
+	const flags: { node?: string; branch?: string } = {};
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i]!;
+		if (!arg.startsWith("--")) {
+			positional.push(arg);
+			continue;
+		}
+		const [flag, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
+		if (flag !== "node" && flag !== "branch") throw invalid(`project add takes only --node and --branch, got --${flag}`);
+		const value = inline ?? args[++i];
+		if (value === undefined || value === "") throw invalid(`project add needs a ${flag} after --${flag}`);
+		flags[flag] = value;
+	}
+	if (positional.length !== 2) throw invalid("project add needs an ID and a repo URL");
+	if (flags.node === undefined) throw invalid("project add needs --node <node>");
+	const [id, repoUrl] = positional as [string, string];
+	return { name: "add-project", id, repoUrl, node: flags.node, ...(flags.branch === undefined ? {} : { branch: flags.branch }) };
+}
+
 const takesThread = new Set(["open", "send", "show", "follow", "unfollow", "unpublish", ...Object.keys(actions)]);
 
-/** Completes the command name, then a thread ID from the threads last listed. */
+/** Completes the command name, then a thread ID from the threads last listed, or a project they are on. */
 export function complete(prefix: string, threads: readonly Thread[]): { value: string; label: string; description?: string }[] | null {
 	const space = prefix.indexOf(" ");
 	if (space === -1) {
@@ -138,7 +169,12 @@ export function complete(prefix: string, threads: readonly Thread[]): { value: s
 	}
 	const name = prefix.slice(0, space);
 	const partial = prefix.slice(space + 1);
-	if (!takesThread.has(name) || partial.includes(" ")) return null;
+	if (partial.includes(" ")) return null;
+	if (name === "project") {
+		const items = ["all", "add", ...new Set(threads.map((t) => t.project))].filter((p) => p.startsWith(partial)).map((p) => ({ value: `project ${p}`, label: p }));
+		return items.length > 0 ? items : null;
+	}
+	if (!takesThread.has(name)) return null;
 	const items = threads
 		.filter((t) => t.id.startsWith(partial) || t.id.startsWith(`th-${partial}`))
 		.map((t) => ({ value: `${name} ${t.id}`, label: t.id, description: `${t.status} ${t.project}: ${t.title}` }));

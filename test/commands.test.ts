@@ -71,6 +71,30 @@ describe("/nexus arguments", () => {
 		expect(invalid("strip maybe")).toStartWith("strip needs on or off\n/nexus");
 	});
 
+	test("project shows the scope, switches it to a project or all of them, and adds one", () => {
+		expect(parseCommand("project")).toEqual({ name: "scope" });
+		expect(parseCommand("project spoon")).toEqual({ name: "scope", project: "spoon" });
+		expect(parseCommand("project all")).toEqual({ name: "scope", project: null });
+		expect(parseCommand("project add spoon git@github.com:me/spoon.git --node firebat")).toEqual({
+			name: "add-project",
+			id: "spoon",
+			repoUrl: "git@github.com:me/spoon.git",
+			node: "firebat",
+		});
+		expect(parseCommand("project add spoon https://github.com/me/spoon --branch=trunk --node=nuc")).toEqual({
+			name: "add-project",
+			id: "spoon",
+			repoUrl: "https://github.com/me/spoon",
+			node: "nuc",
+			branch: "trunk",
+		});
+		expect(invalid("project spoon fork")).toStartWith("project takes one argument, or add\n/nexus");
+		expect(invalid("project add spoon --node firebat")).toStartWith("project add needs an ID and a repo URL\n/nexus");
+		expect(invalid("project add spoon git@x:spoon")).toStartWith("project add needs --node <node>\n/nexus");
+		expect(invalid("project add spoon git@x:spoon --node")).toStartWith("project add needs a node after --node\n/nexus");
+		expect(invalid("project add spoon git@x:spoon --node n --cpus 4")).toStartWith("project add takes only --node and --branch, got --cpus\n/nexus");
+	});
+
 	test("mistakes name the problem and show usage", () => {
 		expect(invalid("new acme --title")).toStartWith("new needs a title after --title\n/nexus");
 		expect(invalid("open")).toStartWith("open needs a thread");
@@ -92,5 +116,13 @@ describe("/nexus completion", () => {
 		expect(complete("show th-0123456789c", threads)?.map((i) => i.value)).toEqual([`show ${idB}`]);
 		expect(complete("unpublish 0123456789c", threads)?.map((i) => i.value)).toEqual([`unpublish ${idB}`]);
 		expect(complete("list a", threads)).toBeNull();
+	});
+
+	test("completes project, then all, add and the projects the threads are on", () => {
+		expect(complete("pro", threads)?.map((i) => i.value)).toEqual(["project"]);
+		expect(complete("project ", threads)?.map((i) => i.value)).toEqual(["project all", "project add", "project acme"]);
+		expect(complete("project a", threads)?.map((i) => i.value)).toEqual(["project all", "project add", "project acme"]);
+		expect(complete("project ac", threads)?.map((i) => i.value)).toEqual(["project acme"]);
+		expect(complete("project add x", threads)).toBeNull();
 	});
 });

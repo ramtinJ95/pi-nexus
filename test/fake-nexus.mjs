@@ -41,6 +41,17 @@ if (command === "watch") {
 } else {
 	const delay = scenario.delayMs?.[command];
 	if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-	process.stdout.write(`${JSON.stringify(responses[command] ?? null, null, 2)}\n`);
+	// `project add` makes the project its arguments describe, as the CLI does, and `projects` lists it from then on,
+	// unless the scenario gives its own reply.
+	const added = `${process.env.FAKE_NEXUS}.projects`;
+	const adds = existsSync(added) ? readFileSync(added, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+	let reply = command === "projects" && adds.length > 0 ? [...(responses.projects ?? []), ...adds] : responses[command];
+	if (command === "project" && argv[1] === "add" && reply === undefined) {
+		const [id, repoUrl] = argv.slice(2).filter((arg) => !arg.startsWith("--"));
+		const flag = (name) => argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+		reply = { id, repoUrl, defaultBranch: flag("branch") ?? "main", defaultNode: flag("node"), resources: { cpus: 2, memoryGiB: 4, diskGiB: 20 }, allowedHosts: [], secrets: [], logins: [], preSetup: null };
+		appendFileSync(added, `${JSON.stringify(reply)}\n`);
+	}
+	process.stdout.write(`${JSON.stringify(reply ?? null, null, 2)}\n`);
 	appendFileSync(answered, `${command}\n`);
 }

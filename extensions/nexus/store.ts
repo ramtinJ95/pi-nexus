@@ -28,15 +28,20 @@ export interface Viewed {
 export interface Settings {
 	/** Whether the strip of threads that need you, have news or work shows above the editor. */
 	strip: boolean;
+	/** The project whose threads the picker, the strip and the status line show, or null for every project. */
+	project: string | null;
 }
 
 export interface SettingsStore {
 	read(): Settings;
-	/** Fails when the file cannot be written, so the caller can say the setting lasts for this session only. */
-	write(settings: Settings): void;
+	/**
+	 * Changes the settings `change` names, keeping what other sessions wrote to the rest. Fails when the file cannot
+	 * be written, so the caller can say the setting lasts for this session only.
+	 */
+	update(change: Partial<Settings>): void;
 }
 
-const defaultSettings: Settings = { strip: true };
+const defaultSettings: Settings = { strip: true, project: null };
 
 const isSeen = (value: unknown): value is Seen =>
 	typeof value === "object" &&
@@ -46,7 +51,11 @@ const isSeen = (value: unknown): value is Seen =>
 	(value as Seen).threads !== null &&
 	Object.values((value as Seen).threads).every((at) => typeof at === "number");
 
-const isSettings = (value: unknown): value is Settings => typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean";
+/** A file from before projects has no `project`, which reads as every project. */
+const isSettings = (value: unknown): value is Partial<Settings> & { strip: boolean } => {
+	const project = (value as Partial<Settings> | null)?.project;
+	return typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean" && (project === undefined || project === null || typeof project === "string");
+};
 
 const directory = () => path.join(getAgentDir(), "pi-nexus");
 export const defaultViewedFile = () => path.join(directory(), "viewed.json");
@@ -190,11 +199,22 @@ export function viewedFile(file: string, now: () => number = Date.now, held: () 
 	};
 }
 
-/** The settings at `file`, the defaults while it is missing or does not parse. */
-export function settingsFile(file: string): SettingsStore {
+/**
+ * The settings at `file`, the defaults while it is missing or does not parse. A change merges with what other sessions
+ * wrote, under the same lock as the looks, so two sessions changing different settings keep both. `held` runs between
+ * a change's read and its write, as for the looks.
+ */
+export function settingsFile(file: string, held: () => void = () => {}): SettingsStore {
 	const store = jsonFile(file, isSettings);
+	const read = (): Settings => ({ ...defaultSettings, ...store.load() });
 	return {
-		read: () => store.load() ?? defaultSettings,
-		write: (settings) => void store.write(settings),
+		read,
+		update(change) {
+			locked(file, () => {
+				const settings = read();
+				held();
+				store.write({ ...settings, ...change });
+			});
+		},
 	};
 }
