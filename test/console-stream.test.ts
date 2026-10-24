@@ -64,7 +64,7 @@ describe("a streaming answer", () => {
 				return new Promise(() => {});
 			},
 		};
-		void new Console(nexus, closed.signal, memoryViewed(), () => {}, display).thread(ui as never, "/tmp", idA);
+		void new Console(nexus, closed.signal, memoryViewed(), new Map(), () => {}, display).thread(ui as never, "/tmp", idA);
 		const text = () => plain(screen.render(100));
 
 		// The lines a poll prints together draw together, once.

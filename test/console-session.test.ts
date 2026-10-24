@@ -50,7 +50,7 @@ function open() {
 	const n = heldNexus();
 	const closed = new AbortController();
 	const u = heldUi();
-	void new Console(n.nexus, closed.signal, memoryViewed(), () => {}, display).thread(u.ui, "/tmp", idA);
+	void new Console(n.nexus, closed.signal, memoryViewed(), new Map(), () => {}, display).thread(u.ui, "/tmp", idA);
 	n.emit(reset(idA, entries));
 	n.emit(state(idA, working));
 	n.emit({ type: "live", thread: idA, ...live });
@@ -102,7 +102,7 @@ describe("console over a session", () => {
 		jest.useFakeTimers();
 		const n = heldNexus();
 		const u = heldUi();
-		void new Console(n.nexus, new AbortController().signal, memoryViewed(), () => {}, display).browse(u.ui, "/tmp");
+		void new Console(n.nexus, new AbortController().signal, memoryViewed(), new Map(), () => {}, display).browse(u.ui, "/tmp");
 		// No agent works, so /nexus opens the picker.
 		n.of("threads")[0]!.answer([]);
 		await flush();

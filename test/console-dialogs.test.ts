@@ -20,11 +20,11 @@ describe("picker", () => {
 		row(idC, { project: "nexus", title: "Old work", status: "archived", desired: "deleted", pylon: { node: "firebat", actualState: "absent", failed: null } }),
 	];
 
-	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads) {
+	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads, parked = new Map<string, number>()) {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000);
 		picker.focused = true;
-		picker.setThreads(list, projects, seen);
+		picker.setThreads(list, projects, { seen, parked });
 		const press = (...input: string[]) => input.forEach((k) => picker.handleInput(k));
 		return { picker, ends, text: () => plain(picker.render(width)), press };
 	}
@@ -126,7 +126,7 @@ describe("picker", () => {
 	test("s lists the keys too, and r reads the threads again", () => {
 		let reads = 0;
 		const picker = new Picker(fakeTui(), piTheme(), () => {}, () => asked + 60_000, undefined, () => reads++);
-		picker.setThreads(threads, projects, { since: 0, threads: {} });
+		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() });
 		picker.handleInput("s");
 		expect(plain(picker.render(140))).toContain("read the threads again");
 		picker.handleInput("j");
@@ -159,10 +159,20 @@ describe("picker", () => {
 		expect(open(140, { since: asked + 31_000, threads: {} }, list).text()).not.toMatch(/Answered new/);
 	});
 
+	test("a thread seen parked needs you until its agent does something after that", () => {
+		const parked = new Map([[idB, asked + 10_000]]);
+		const seen = { since: asked + 60_000, threads: {} };
+		const stuck = row(idB, { project: "nexus", title: "Docs pass", createdAt: asked - 1, lastAgentActivityAt: asked + 5_000 });
+		expect(open(140, seen, [threads[0]!, stuck], parked).text()).toMatch(/● Docs pass needs you /);
+		// Retried since: the agent worked after the thread was seen parked.
+		const retried = { ...stuck, lastAgentActivityAt: asked + 20_000 };
+		expect(open(140, seen, [threads[0]!, retried], parked).text()).not.toMatch(/Docs pass needs you/);
+	});
+
 	test("opens on the thread it is given, once the threads load", () => {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000, idB);
-		picker.setThreads(threads, projects, { since: 0, threads: {} });
+		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() });
 		picker.handleInput(keys.enter);
 		expect(ends).toEqual([{ kind: "open", thread: idB }]);
 	});

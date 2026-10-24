@@ -111,6 +111,9 @@ export function memoryViewed(since = 0): Viewed & { looks: [string, number][] } 
 			looks.push([thread, at]);
 			threads[thread] = Math.max(threads[thread] ?? 0, at);
 		},
+		prune(kept, listedAt) {
+			for (const [thread, at] of Object.entries(threads)) if (!kept.has(thread) && at < listedAt) delete threads[thread];
+		},
 	};
 }
 

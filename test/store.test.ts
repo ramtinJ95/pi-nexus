@@ -31,6 +31,16 @@ describe("the looks store", () => {
 		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ since: 100, threads: { "th-a": 500, "th-b": 600 } });
 	});
 
+	test("a prune drops the looks at threads the list no longer has, but not a look newer than the list", () => {
+		const at = file();
+		const store = viewedFile(at, () => 100);
+		store.mark("th-kept", 200);
+		store.mark("th-deleted", 300);
+		store.mark("th-new", 900);
+		store.prune(new Set(["th-kept"]), 500);
+		expect(store.read()).toEqual({ since: 100, threads: { "th-kept": 200, "th-new": 900 } });
+	});
+
 	test("a file that does not parse starts afresh instead of failing", () => {
 		const at = file();
 		viewedFile(at, () => 100).read();

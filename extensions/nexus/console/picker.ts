@@ -10,9 +10,8 @@ import { DynamicBorder, rawKeyHint, type Theme } from "@earendil-works/pi-coding
 import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Project, ThreadRow } from "../contract.ts";
 import { lastActivityAt } from "../thread.ts";
-import type { Seen } from "../store.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
-import { ago, attention, badge, groups, pickerRows, span, threadState, toneColor, type Group, type PickerRow, type Tone } from "./model.ts";
+import { ago, attention, badge, groups, pickerRows, span, threadState, toneColor, type Group, type Marks, type PickerRow, type Tone } from "./model.ts";
 
 /** `back` returns to where the picker was opened from; `close` leaves the console. */
 export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "back" } | { kind: "close" };
@@ -43,7 +42,7 @@ export class Picker implements Component, Focusable {
 	private readonly search = new Input();
 	private readonly keys = new KeyReader(pickerKeys);
 	private groups: Group[] = [];
-	private seen: Seen = { since: 0, threads: {} };
+	private marks: Marks = { seen: { since: 0, threads: {} }, parked: new Map() };
 	private readonly unfolded = new Set<string>();
 	private rows: PickerRow[] = [];
 	private selected = 0;
@@ -72,12 +71,12 @@ export class Picker implements Component, Focusable {
 		this.search.focused = value && this.filtering;
 	}
 
-	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], seen: Seen): void {
+	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], marks: Marks): void {
 		const current = this.rows[this.selected];
 		const keep = this.at ?? (current?.kind === "thread" ? current.thread.id : undefined);
 		this.at = undefined;
 		this.groups = groups(threads, projects);
-		this.seen = seen;
+		this.marks = marks;
 		this.error = undefined;
 		this.layout();
 		// The same thread stays selected across a refresh.
@@ -210,7 +209,7 @@ export class Picker implements Component, Focusable {
 
 	/** What a thread wants of the person, after its title. */
 	private marker(th: ThreadRow): string {
-		const a = attention(th, this.seen);
+		const a = attention(th, this.marks);
 		return a === "needs-you" ? ` ${this.theme.fg("warning", "needs you")}` : a === "new" ? ` ${this.theme.fg("accent", "new")}` : "";
 	}
 

@@ -37,13 +37,13 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 	const statuses: (string | undefined)[] = [];
 	const tools: { name: string; execute: (...args: unknown[]) => Promise<unknown> }[] = [];
 	const widgets: [string, ((tui: unknown, theme: unknown) => Component) | undefined][] = [];
-	const handlers = new Map<string, () => void>();
+	const handlers = new Map<string, (event?: unknown, ctx?: unknown) => void>();
 	let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
 	const pi = {
 		registerEntryRenderer() {},
 		registerTool: (tool: (typeof tools)[number]) => tools.push(tool),
 		registerCommand: (_name: string, options: { handler: typeof command }) => (command = options.handler),
-		on: (event: string, handler: () => void) => handlers.set(event, handler),
+		on: (event: string, handler: (event?: unknown, ctx?: unknown) => void) => handlers.set(event, handler),
 		appendEntry: (_type: string, note: (typeof notes)[number]) => notes.push(note),
 	} as unknown as ExtensionAPI;
 	const ctx = {
@@ -88,7 +88,9 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 		press(...input);
 	};
 	const tool = (name: string, params: object) => tools.find((t) => t.name === name)!.execute("call-1", params, undefined, undefined, ctx);
-	return { run: (args: string) => command!(args, ctx), tool, bin: fake.bin, calls: fake.calls, notes, notified, shown, statuses, widgets, until, text, type, press, normal };
+	/** pi's session_start, as an interactive session sends it. */
+	const start = () => handlers.get("session_start")!({ type: "session_start" }, ctx);
+	return { run: (args: string) => command!(args, ctx), tool, start, bin: fake.bin, calls: fake.calls, notes, notified, shown, statuses, widgets, until, text, type, press, normal };
 }
 
 describe("console", () => {
@@ -291,16 +293,58 @@ describe("console", () => {
 		expect(line).toMatch(/^nexus ● Broken needs you {2}· {2}● Answered new reply {2}· {2}● Fix the probe retry working 3 min$/);
 		expect(plain(strip!(fakeTui(), piTheme()).render(50))).toMatch(/^nexus ● Broken needs you {2}\+2 more$/);
 		await n.run("strip off");
+		// Off stops the polling, so the strip and the summary it keeps go together.
 		expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
+		expect(n.statuses.at(-1)).toBeUndefined();
 		expect(settings.writes).toEqual([{ strip: false }]);
-		// A later session reads the setting, so its strip stays hidden while its status still counts.
+		// A later session reads the setting, so it starts without polling, and a command does not bring either back.
 		const later = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed: memoryViewed(0), settings });
+		later.start();
 		await later.run("list");
-		await later.until(() => later.statuses.at(-1) === "nexus 1 working · 1 needs you · 1 new", "the summary");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(later.calls().filter((c) => c[0] === "threads")).toHaveLength(2);
+		expect(later.statuses.filter((s) => s !== undefined)).toEqual([]);
 		expect(later.widgets.filter(([, factory]) => factory !== undefined)).toEqual([]);
 		await later.run("strip on");
 		expect(later.widgets.at(-1)?.[1]).toBeDefined();
+		expect(later.statuses.at(-1)).toBe("nexus 1 working · 1 needs you · 1 new");
 		expect(settings.writes).toEqual([{ strip: false }, { strip: true }]);
+	});
+
+	test("each poll drops the looks at threads the list no longer has", async () => {
+		const viewed = memoryViewed(0);
+		viewed.mark(idA, 1_000);
+		viewed.mark("th-00000000dead", 1_000);
+		const n = load(scenario, { viewed });
+		n.start();
+		await n.until(() => n.statuses.at(-1) !== undefined, "the summary");
+		expect(viewed.read().threads).toEqual({ [idA]: 1_000 });
+	});
+
+	test("with the strip on, the summary and strip show from the session's start, before any /nexus", async () => {
+		const n = load(scenario);
+		n.start();
+		await n.until(() => n.statuses.at(-1) === "nexus 1 working", "the summary");
+		expect(n.calls()).toEqual([["threads", "--json"]]);
+		expect(n.widgets.at(-1)?.[1]).toBeDefined();
+		const off = load(scenario, { settings: memorySettings({ strip: false }) });
+		off.start();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(off.calls()).toEqual([]);
+	});
+
+	test("the open thread's parked tasks need you, in the status line and the strip", async () => {
+		const parked = { ...working, run: "parked" as const, parkedTasks: 2 };
+		const list = [row(idA, { title: "Parked one", lastAgentActivityAt: 1_000 })];
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list }, watch: [{ event: reset(idA, entries) }, { event: state(idA, parked) }] }, { viewed: memoryViewed(Date.now() + 60_000) });
+		await n.run("list");
+		await n.until(() => n.statuses.at(-1) === "nexus 0 working", "the summary");
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("2 tasks hit the restart limit"), "the parked thread");
+		n.normal("q");
+		await done;
+		await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 needs you", "needs you");
+		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus ● Parked one needs you");
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {

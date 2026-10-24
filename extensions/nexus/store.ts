@@ -17,6 +17,11 @@ export interface Viewed {
 	read(): Seen;
 	/** Records a look at `thread` at `at`. */
 	mark(thread: string, at: number): void;
+	/**
+	 * Drops the looks at threads not in `kept`, a list read at `listedAt`, so the store does not grow with deleted
+	 * threads. A look recorded after the list was read stays, since the list may predate its thread.
+	 */
+	prune(kept: ReadonlySet<string>, listedAt: number): void;
 }
 
 export interface Settings {
@@ -90,6 +95,12 @@ export function viewedFile(file: string, now: () => number = Date.now): Viewed {
 		mark(thread, at) {
 			const seen = store.load() ?? { since: now(), threads: {} };
 			store.write({ since: seen.since, threads: { ...seen.threads, [thread]: Math.max(seen.threads[thread] ?? 0, at) } });
+		},
+		prune(kept, listedAt) {
+			const seen = store.load();
+			if (seen === undefined) return;
+			const threads = Object.fromEntries(Object.entries(seen.threads).filter(([thread, at]) => kept.has(thread) || at >= listedAt));
+			if (Object.keys(threads).length < Object.keys(seen.threads).length) store.write({ since: seen.since, threads });
 		},
 	};
 }

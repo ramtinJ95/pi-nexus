@@ -50,6 +50,13 @@ const notes = (lines: Line[]) =>
 const notification = (text: string) => (l: Line) => l.type === "extension_ui_request" && l.method === "notify" && l.message === text;
 
 describe("pi-nexus in pi", () => {
+	test("the status line shows from the session's start, before any /nexus", async () => {
+		const pi = startPi({ responses: { threads } });
+		pi.send({ id: "1", type: "get_state" });
+		await pi.waitFor((l) => l.method === "setStatus" && l.statusText === "nexus 1 working");
+		expect(pi.calls()).toEqual([["threads", "--json"]]);
+	}, 30_000);
+
 	test("/nexus list renders threads into the session and sets the status", async () => {
 		const pi = startPi({ responses: { threads } });
 		pi.send({ id: "1", type: "prompt", message: "/nexus list" });
@@ -71,7 +78,7 @@ describe("pi-nexus in pi", () => {
 		});
 		pi.send({ id: "1", type: "prompt", message: "/nexus send 0123456789ab hi there" });
 		await pi.waitFor(notification(`Stopped following ${idA}: the agent answered`));
-		expect(pi.calls().slice(0, 2)).toEqual([["threads", "--json"], ["send", "--json", idA, "--", "hi there"]]);
+		expect(pi.calls().filter((c) => c[0] === "send")).toEqual([["send", "--json", idA, "--", "hi there"]]);
 		expect(notes(pi.lines).map((n) => n.body)).toEqual(["> hi", "Hello from the pylon."]);
 		// The widget clears after the notice, so wait for it rather than read it at once.
 		await pi.waitFor((l) => l.method === "setWidget" && l.widgetLines === undefined);

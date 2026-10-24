@@ -1,6 +1,6 @@
 /**
  * The strip above pi's editor: the threads that need you, then those with news since you last looked, then those
- * whose agent works, with how long ago the message it answers came. It shows while the session follows Nexus, and
+ * whose agent works, with how long ago the message it answers came. It shows from the session's start, and
  * `/nexus strip off` hides it.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";

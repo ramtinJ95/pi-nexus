@@ -93,22 +93,42 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 }
 
 /**
- * What a thread wants of the person, most urgent first: its pylon failed and only they can retry it, or its agent
- * did something since they last looked. A working agent is not done yet, and an archived or deleted thread wants
- * nothing.
+ * The threads seen parked, with when, from the thread the console shows or a follow, since the threads list does not
+ * say. The Claude Code Nexus mod knows parked tasks the same way, only for the thread it watches.
+ */
+export type Parked = Map<string, number>;
+
+/** Records what `state` says of the thread's parked tasks, seen at `now`. */
+export function noteParked(parked: Parked, thread: string, state: ThreadState | undefined, now: number): void {
+	if (state?.run === "parked") parked.set(thread, now);
+	else if (state !== undefined) parked.delete(thread);
+}
+
+/** What the person has looked at, and the threads seen parked: what the markers read. */
+export interface Marks {
+	seen: Seen;
+	parked: ReadonlyMap<string, number>;
+}
+
+/**
+ * What a thread wants of the person, most urgent first: its pylon failed or its tasks are parked, and only they can
+ * retry them, or its agent did something since they last looked. A working agent is not done yet, and an archived
+ * or deleted thread wants nothing. A thread seen parked stays so until its agent does something after that.
  */
 export type Attention = "needs-you" | "new" | null;
 
-export function attention(t: ThreadRow, seen: Seen): Attention {
+export function attention(t: ThreadRow, { seen, parked }: Marks): Attention {
 	if (isClosed(t)) return null;
 	if (t.pylon.failed !== null) return "needs-you";
 	if (t.agentTurnRunning) return null;
+	const parkedAt = parked.get(t.id);
+	if (parkedAt !== undefined && t.lastAgentActivityAt <= parkedAt) return "needs-you";
 	return t.lastAgentActivityAt > (seen.threads[t.id] ?? seen.since) ? "new" : null;
 }
 
 /** The status line's summary, such as `nexus 2 working · 1 needs you · 3 new`. The counts other than working show when not zero. */
-export function summary(threads: readonly ThreadRow[], seen: Seen): string {
-	const count = (a: Attention) => threads.filter((t) => attention(t, seen) === a).length;
+export function summary(threads: readonly ThreadRow[], marks: Marks): string {
+	const count = (a: Attention) => threads.filter((t) => attention(t, marks) === a).length;
 	const needs = count("needs-you");
 	const fresh = count("new");
 	return [`nexus ${workingCount(threads)} working`, ...(needs > 0 ? [`${needs} needs you`] : []), ...(fresh > 0 ? [`${fresh} new`] : [])].join(" · ");
@@ -122,10 +142,10 @@ export interface Chip {
 
 const chipOrder: Readonly<Record<Chip["kind"], number>> = { "needs-you": 0, new: 1, working: 2 };
 
-export function chips(threads: readonly ThreadRow[], seen: Seen): Chip[] {
+export function chips(threads: readonly ThreadRow[], marks: Marks): Chip[] {
 	return threads
 		.flatMap((thread): Chip[] => {
-			const kind = attention(thread, seen) ?? (thread.agentTurnRunning && !isClosed(thread) ? "working" : null);
+			const kind = attention(thread, marks) ?? (thread.agentTurnRunning && !isClosed(thread) ? "working" : null);
 			return kind === null ? [] : [{ thread, kind }];
 		})
 		.sort((a, b) => chipOrder[a.kind] - chipOrder[b.kind] || lastActivityAt(b.thread) - lastActivityAt(a.thread));

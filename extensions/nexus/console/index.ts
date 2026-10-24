@@ -12,7 +12,7 @@ import type { Action } from "../commands.ts";
 import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
 import type { NodeSummary, ThreadRow } from "../contract.ts";
 import type { Viewed } from "../store.ts";
-import { isClosed, startArgs } from "./model.ts";
+import { isClosed, noteParked, startArgs, type Parked } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { StartFormView } from "./start-form.ts";
 import { ThreadScreen, type ScreenEnd } from "./thread-screen.ts";
@@ -107,6 +107,8 @@ export class Console {
 		private readonly nexus: Nexus,
 		private readonly closed: AbortSignal,
 		private readonly viewed: Viewed,
+		/** The threads seen parked, which the open thread's watch keeps up to date. */
+		private readonly parked: Parked,
 		/** Says what went wrong outside a view, such as a look that could not be recorded. */
 		private readonly warn: (message: string) => void,
 		private readonly display: (cwd: string) => Display = userDisplay,
@@ -254,7 +256,7 @@ export class Console {
 					listProjects(this.nexus, signal).catch((err: unknown) => err as Error),
 				]);
 				if (signal.aborted || !current()) return;
-				picker.setThreads(threads, Array.isArray(projects) ? projects : [], this.viewed.read());
+				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked });
 				if (!Array.isArray(projects)) picker.setError(`The projects could not be read, so only projects with threads show: ${message(projects)}`);
 			} catch (err) {
 				if (!signal.aborted && current()) picker.setError(`The threads could not be read: ${message(err)}`);
@@ -274,6 +276,7 @@ export class Console {
 		const stop = new AbortController();
 		const signal = AbortSignal.any([stop.signal, this.closed]);
 		const nexus = this.nexus;
+		const parked = this.parked;
 		let view: ThreadView = emptyView;
 		const begin = inOrder();
 		const refreshDetail = async () => {
@@ -321,6 +324,7 @@ export class Console {
 						view = reduce(view, event);
 						redraw.request();
 						if (event.type !== "state") return;
+						noteParked(parked, thread, view.state, Date.now());
 						// A changed state can change what only the detail holds, such as the pylon's node, its previews or a
 						// retry refusal.
 						const key = JSON.stringify(view.state);
