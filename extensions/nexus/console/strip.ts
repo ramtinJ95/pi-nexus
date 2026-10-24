@@ -1,7 +1,7 @@
 /**
  * The strip above pi's editor: the threads that need you, then those with news since you last looked, then those
  * whose agent works, with how long ago the message it answers came. It shows from the session's start, and
- * `/nexus strip off` hides it.
+ * `/nexus strip off` hides it. Scoped to one project, it names the project first.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -18,6 +18,7 @@ export class Strip implements Component {
 		private readonly theme: Theme,
 		private readonly chips: readonly Chip[],
 		private readonly now: number,
+		private readonly project: string | null = null,
 	) {}
 
 	render(width: number): string[] {
@@ -28,7 +29,7 @@ export class Strip implements Component {
 			const since = kind === "working" && thread.lastHumanActivityAt !== 0 ? ` ${span(thread.lastHumanActivityAt, this.now) ?? "now"}` : "";
 			return `${t.fg(look.color, "●")} ${thread.title} ${t.fg(look.color, `${look.label}${since}`)}`;
 		});
-		const head = t.fg("dim", "nexus ");
+		const head = t.fg("dim", this.project === null ? "nexus " : `nexus ${this.project} · `);
 		let line = head;
 		for (const [i, chip] of shown.entries()) {
 			const more = shown.length - i - 1;

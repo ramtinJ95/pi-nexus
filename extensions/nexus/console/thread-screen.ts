@@ -67,8 +67,11 @@ export interface ScreenActions {
 	copy(text: string): Promise<void>;
 }
 
-/** `back` returns to where the view was opened from, `threads` opens the picker to switch, `close` leaves the console. */
-export type ScreenEnd = { kind: "close" } | { kind: "back" } | { kind: "threads" } | { kind: "start-again"; project: string; title: string };
+/**
+ * `back` returns to where the view was opened from, `threads` opens the picker to switch, `projects` the project
+ * picker, and `close` leaves the console.
+ */
+export type ScreenEnd = { kind: "close" } | { kind: "back" } | { kind: "threads" } | { kind: "projects" } | { kind: "start-again"; project: string; title: string };
 
 /** The thread view's slash commands, completed as pi completes its own. */
 export const screenCommands: readonly { name: string; description: string; action?: Action }[] = [
@@ -125,6 +128,7 @@ type Command =
 	| "actions"
 	| "refresh"
 	| "threads"
+	| "projects"
 	| "help"
 	| "close"
 	| "escape";
@@ -157,6 +161,7 @@ const threadKeys: readonly Binding<Command>[] = [
 	{ keys: ["m", ":"], command: "actions", help: "the thread's actions: abort, retry, archive, delete and more" },
 	{ keys: ["r"], command: "refresh", help: "read the thread's details again" },
 	{ keys: ["t"], command: "threads", help: "the thread picker, to switch threads" },
+	{ keys: ["p"], command: "projects", help: "the project picker, to choose the project whose threads show" },
 	{ keys: ["s", "?"], command: "help", help: "this help" },
 	{ keys: ["q"], command: "close", help: "close the console" },
 	{ keys: ["escape"], command: "escape", help: "back to the conversation" },
@@ -784,6 +789,8 @@ export class ThreadScreen implements Component, Focusable {
 				return this.openActions();
 			case "threads":
 				return this.options.done({ kind: "threads" });
+			case "projects":
+				return this.options.done({ kind: "projects" });
 			case "help":
 				this.help = true;
 				return;

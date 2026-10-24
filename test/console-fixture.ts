@@ -4,6 +4,7 @@ import { initTheme, theme } from "../node_modules/@earendil-works/pi-coding-agen
 import { getMarkdownTheme, type KeybindingsManager as Keybindings, type Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Display } from "../extensions/nexus/console/transcript.ts";
+import { Scope } from "../extensions/nexus/scope.ts";
 import type { Settings, SettingsStore, Viewed } from "../extensions/nexus/store.ts";
 import type { AssistantMessage, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { idA, thread } from "./fixtures.ts";
@@ -117,19 +118,22 @@ export function memoryViewed(since = 0): Viewed & { looks: [string, number][] } 
 	};
 }
 
-/** Settings kept in memory, with each write recorded. */
-export function memorySettings(settings: Settings = { strip: true }): SettingsStore & { writes: Settings[] } {
-	let kept = settings;
-	const writes: Settings[] = [];
+/** Settings kept in memory, with each change recorded. */
+export function memorySettings(settings: Partial<Settings> = {}): SettingsStore & { writes: Partial<Settings>[] } {
+	let kept: Settings = { strip: true, project: null, ...settings };
+	const writes: Partial<Settings>[] = [];
 	return {
 		writes,
 		read: () => kept,
-		write(next) {
-			writes.push(next);
-			kept = next;
+		update(change) {
+			writes.push(change);
+			kept = { ...kept, ...change };
 		},
 	};
 }
+
+/** The scope of every project, kept in memory. */
+export const memoryScope = (settings: Partial<Settings> = {}) => new Scope(memorySettings(settings), () => {}, () => {});
 
 /** The extension's stores, in memory. */
 export const memoryStores = (viewed = memoryViewed(), settings = memorySettings()) => ({ viewed, settings });

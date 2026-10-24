@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { createNexus, listThreads, showThread } from "../extensions/nexus/cli.ts";
+import { addProject, createNexus, listProjects, listThreads, showThread } from "../extensions/nexus/cli.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
 import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
@@ -349,8 +349,8 @@ describe("console", () => {
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
 		const settings = {
-			read: () => ({ strip: true }),
-			write() {
+			read: () => ({ strip: true, project: null }),
+			update() {
 				throw new Error("EACCES: permission denied");
 			},
 		};
@@ -431,6 +431,208 @@ describe("console", () => {
 		await done;
 	});
 
+	describe("projects", () => {
+		const spoonThread = row("th-5b00a0000001", { project: "spoon", title: "Spoon work", lastAgentActivityAt: 1_000 });
+		const both = [...projects, { id: "spoon", repoUrl: "git@example.com:spoon", defaultNode: "firebat", defaultBranch: "main" }];
+		const idleThreads = [...threads.map((t) => ({ ...t, agentTurnRunning: false })), spoonThread];
+		const scoped: Scenario = { ...scenario, responses: { ...scenario.responses, projects: both, threads: [...threads, spoonThread] } };
+		const idleScenario: Scenario = { ...scoped, responses: { ...scoped.responses, threads: idleThreads } };
+		const addFails = (exit: number, kind: string, error: string): Scenario => ({ ...idleScenario, fail: { project: { exit, kind, error } } });
+
+		test("p in the picker chooses a project, whose threads alone then show in the picker, the status line and the strip, in later sessions too", async () => {
+			const settings = memorySettings();
+			const n = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			n.start();
+			await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 new", "the summary of every project");
+			const done = n.run("");
+			await n.until(() => n.shown.length === 1 && n.text().includes("Nexus threads · All projects") && n.text().includes("Spoon work"), "the picker");
+			n.press("p");
+			await n.until(() => n.shown.length === 2 && n.text().includes("git@example.com:spoon"), "the project picker");
+			expect(n.text()).toMatch(/→ All projects +current\n/);
+			expect(n.text()).toMatch(/acme +git@example\.com:acme\n/);
+			expect(n.text()).toContain("+ New project…");
+			n.press("j", "j", "\r");
+			await n.until(() => n.shown.length === 3 && n.text().includes("Nexus threads · spoon"), "the picker on spoon");
+			expect(n.text()).toContain("Spoon work");
+			expect(n.text()).not.toContain(threads[1]!.title);
+			expect(settings.writes).toEqual([{ project: "spoon" }]);
+			await n.until(() => n.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "the summary of spoon");
+			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus spoon · ● Spoon work new reply");
+			n.press("q");
+			await done;
+			const later = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			later.start();
+			await later.until(() => later.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "a later session's summary of spoon");
+		});
+
+		test("p in a thread view opens the project picker: Esc goes back to the thread, and a project shows its threads, with the thread behind them", async () => {
+			const n = load(scoped);
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
+			n.normal("p");
+			await n.until(() => n.shown.length === 2 && n.text().includes("+ New project…"), "the project picker");
+			n.press("\x1b");
+			await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+			n.press("p");
+			await n.until(() => n.shown.length === 4 && n.text().includes("git@example.com:spoon"), "the project picker again");
+			n.press("j", "j", "o");
+			await n.until(() => n.shown.length === 5 && n.text().includes("Nexus threads · spoon") && n.text().includes("Spoon work"), "spoon's threads");
+			n.press("\x1b");
+			await n.until(() => n.shown.length === 6 && n.text().includes(`(${idA})`), "the thread behind them");
+			n.press("q");
+			await done;
+		});
+
+		test("New project adds one with the form through nexus project add, then shows its threads", async () => {
+			const settings = memorySettings();
+			const n = load(idleScenario, { settings });
+			const done = n.run("");
+			await n.until(() => n.shown.length === 1 && n.text().includes("Nexus threads"), "the picker");
+			n.press("p");
+			await n.until(() => n.shown.length === 2 && n.text().includes("git@example.com:spoon"), "the project picker");
+			n.press("G", "\r");
+			await n.until(() => n.shown.length === 3 && n.text().includes("Add a project") && n.text().includes("[firebat]"), "the form");
+			n.press(..."fork", "\t", ..."git@github.com:me/fork.git", "\t", "\t", "\r");
+			await n.until(() => n.shown.length === 4 && n.text().includes("Nexus threads · fork"), "the picker on the new project");
+			expect(n.calls()).toContainEqual(["project", "add", "--json", "fork", "git@github.com:me/fork.git", "--node=firebat", "--branch=main"]);
+			expect(n.text()).toMatch(/fork 0\n/);
+			expect(settings.writes).toEqual([{ project: "fork" }]);
+			n.press("q");
+			await done;
+		});
+
+		test("a failed add shows the CLI's message as it is, in the form, and keeps the scope", async () => {
+			const failures: [Scenario, string][] = [
+				[addFails(5, "conflict", "project spoon already exists"), "project spoon already exists"],
+				[addFails(64, "invalid", "invalid project ID Spoon!: use lowercase letters, digits and dashes"), "invalid project ID Spoon!: use lowercase letters, digits and dashes"],
+				[addFails(64, "invalid", "unknown command project"), "nexus has no project add command: adding a project needs Nexus CLI 0.4.0 or later (nexus --version)"],
+			];
+			for (const [failing, message] of failures) {
+				const settings = memorySettings();
+				const n = load(failing, { settings });
+				const done = n.run("");
+				await n.until(() => n.shown.length === 1 && n.text().includes("Nexus threads"), "the picker");
+				n.press("p");
+				await n.until(() => n.shown.length === 2 && n.text().includes("+ New project…"), "the project picker");
+				n.press("G", "\r");
+				await n.until(() => n.shown.length === 3 && n.text().includes("[firebat]"), "the form");
+				n.press(..."spoon", "\t", ..."git@example.com:spoon", "\t", "\t", "\r");
+				await n.until(() => n.text().replace(/\s+/g, " ").includes(message), message);
+				expect(n.calls().filter((c) => c[0] === "project")).toHaveLength(1);
+				expect(settings.writes).toEqual([]);
+				// Esc goes back to the project picker, and Esc again to the threads.
+				n.press("\x1b");
+				await n.until(() => n.shown.length === 4 && n.text().includes("+ New project…"), "the project picker again");
+				n.press("\x1b");
+				await n.until(() => n.shown.length === 5 && n.text().includes("Nexus threads · All projects"), "the picker again");
+				n.press("q");
+				await done;
+			}
+		});
+
+		test("a remembered project that no longer exists falls back to every project, with one notice", async () => {
+			const notice = "The project gone no longer exists, so Nexus shows every project again.";
+			const settings = memorySettings({ strip: true, project: "gone" });
+			const n = load(scoped, { settings });
+			n.start();
+			await n.until(() => n.notified.some(([m]) => m === notice), "the notice");
+			expect(n.notified.filter(([m]) => m === notice)).toEqual([[notice, "warning"]]);
+			expect(settings.writes).toEqual([{ project: null }]);
+			await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 new", "the summary of every project");
+			const later = load(scoped, { settings });
+			later.start();
+			await later.until(() => later.statuses.at(-1) === "nexus 1 working · 1 new", "a later session's summary");
+			expect(later.notified).toEqual([]);
+			expect(later.calls().filter((c) => c[0] === "projects")).toEqual([]);
+
+			// With the strip off, the picker finds out.
+			const off = memorySettings({ strip: false, project: "gone" });
+			const o = load(idleScenario, { settings: off });
+			const done = o.run("");
+			await o.until(() => o.shown.length === 1 && o.text().includes("Nexus threads · All projects") && o.text().includes("Spoon work"), "the picker of every project");
+			await o.until(() => o.notified.some(([m]) => m === notice), "the picker's notice");
+			o.press("r");
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(o.notified.filter(([m]) => m === notice)).toHaveLength(1);
+			expect(off.writes).toEqual([{ project: null }]);
+			o.press("q");
+			await done;
+		});
+
+		test("the start form finds out a remembered project no longer exists, and starts on the first project instead", async () => {
+			const settings = memorySettings({ strip: false, project: "gone" });
+			const n = load(scoped, { settings });
+			const done = n.run("new");
+			await n.until(() => n.shown.length === 1 && n.text().includes("Start a thread"), "the start form");
+			expect(n.text()).toContain("[acme]");
+			expect(n.text()).not.toContain("There is no project gone");
+			expect(n.notified).toEqual([["The project gone no longer exists, so Nexus shows every project again.", "warning"]]);
+			expect(settings.writes).toEqual([{ project: null }]);
+			n.shown[0]!.done(null);
+			await done;
+		});
+
+		test("/nexus project shows the scope, and /nexus project <id> or all switches it", async () => {
+			const settings = memorySettings();
+			const n = load(scoped, { settings });
+			n.start();
+			await n.run("project");
+			expect(n.notified.at(-1)).toEqual(["Nexus shows every project. /nexus project <id> shows one.", "info"]);
+			await n.run("project spoon");
+			expect(n.notified.at(-1)).toEqual(["Nexus shows the project spoon.", "info"]);
+			await n.until(() => n.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "the summary of spoon");
+			await n.run("project");
+			expect(n.notified.at(-1)).toEqual(["Nexus shows the project spoon. /nexus project all shows every project.", "info"]);
+			await n.run("project nope");
+			expect(n.notified.at(-1)).toEqual(["nexus: there is no project nope. The projects are acme and spoon", "error"]);
+			await n.run("project all");
+			expect(n.notified.at(-1)).toEqual(["Nexus shows every project.", "info"]);
+			await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 new", "the summary of every project");
+			expect(settings.writes).toEqual([{ project: "spoon" }, { project: null }]);
+		});
+
+		test("/nexus project add adds a project through nexus project add and switches to it, and a failure says why", async () => {
+			const settings = memorySettings();
+			const n = load(scoped, { settings });
+			await n.run("project add fork git@github.com:me/fork.git --node firebat");
+			expect(n.calls()).toContainEqual(["project", "add", "--json", "fork", "git@github.com:me/fork.git", "--node=firebat"]);
+			expect(n.notified.at(-1)).toEqual(["Added the project fork (git@github.com:me/fork.git) on firebat. Nexus shows its threads.", "info"]);
+			expect(settings.writes).toEqual([{ project: "fork" }]);
+			const f = load(addFails(5, "conflict", "project spoon already exists"), { settings });
+			await f.run("project add spoon git@example.com:spoon --node firebat --branch trunk");
+			expect(f.calls()).toContainEqual(["project", "add", "--json", "spoon", "git@example.com:spoon", "--node=firebat", "--branch=trunk"]);
+			expect(f.notified.at(-1)).toEqual(["nexus: project spoon already exists", "error"]);
+			expect(settings.writes).toEqual([{ project: "fork" }]);
+		});
+
+		test("the start form and /nexus start from the scope's project", async () => {
+			const settings = memorySettings({ strip: false, project: "spoon" });
+			const n = load(scoped, { settings });
+			const done = n.run("");
+			// The working thread is acme's, so /nexus opens spoon's picker rather than it.
+			await n.until(() => n.shown.length === 1 && n.text().includes("Nexus threads · spoon"), "spoon's picker");
+			expect(n.shown[0]!.options).toBeUndefined();
+			n.press("n");
+			await n.until(() => n.shown.length === 2 && n.text().includes("Start a thread"), "the start form");
+			expect(n.text()).toContain("[spoon]");
+			n.shown[1]!.done(null);
+			await n.until(() => n.shown.length === 3, "the picker again");
+			n.press("q");
+			await done;
+			const form = n.run("new");
+			await n.until(() => n.shown.length === 4 && n.text().includes("Start a thread"), "the start form from /nexus new");
+			expect(n.text()).toContain("[spoon]");
+			n.shown[3]!.done(null);
+			await form;
+		});
+
+		test("the model's nexus_threads is not scoped", async () => {
+			const n = load(scoped, { settings: memorySettings({ strip: false, project: "spoon" }) });
+			const result = (await n.tool("nexus_threads", {})) as { details: { project: string }[] };
+			expect(result.details.map((t) => t.project)).toEqual(["acme", "acme", "acme", "spoon"]);
+		});
+	});
+
 	test("a reply without a field the console needs fails as a contract error", async () => {
 		const { pylon: _, ...bare } = threads[1]!;
 		const n = load({ ...scenario, responses: { ...scenario.responses, threads: [threads[0], bare] } });
@@ -490,6 +692,15 @@ describe("the contract", () => {
 		await expect(listThreads(rows({ pylon: { node: "firebat", failed: null } }))).rejects.toThrow(`nexus threads' row for ${idA} has no pylon.actualState`);
 		await expect(listThreads(rows({ pylon: { node: "firebat", actualState: "running" } }))).rejects.toThrow("has no pylon.failed");
 		await expect(listThreads(rows({ desired: null }))).rejects.toThrow(`nexus threads' row for ${idA} breaks the contract: desired is none of the values or shapes the contract allows`);
+	});
+
+	test("a project add reply is a Project, as nexus projects lists one, and one without its default node fails", async () => {
+		const added = { id: "spoon", repoUrl: "git@example.com:spoon", defaultBranch: "main", defaultNode: "firebat", resources: { cpus: 2, memoryGiB: 4, diskGiB: 20 }, allowedHosts: [], secrets: [], logins: [], preSetup: null };
+		const add = { id: "spoon", repoUrl: "git@example.com:spoon", node: "firebat", branch: "main" };
+		expect(await addProject(nexus({ responses: { project: added } }), add)).toEqual(added);
+		expect(await listProjects(nexus({ responses: { projects: [added] } }))).toEqual([added]);
+		const { defaultNode: _, ...bare } = added;
+		await expect(addProject(nexus({ responses: { project: bare } }), add)).rejects.toThrow("nexus project add has no defaultNode, which pi-nexus needs");
 	});
 
 	test("a detail needs its pylon's retry refusal, which may be null", async () => {

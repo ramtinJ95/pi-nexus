@@ -11,6 +11,10 @@ afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, f
 const racer = (at: string, thread: string, when: number, holdMs: number) =>
 	Bun.spawn(["bun", path.join(import.meta.dir, "store-racer.ts"), at, thread, String(when), String(holdMs)], { stdout: "pipe", stderr: "pipe" });
 
+/** A pi session changing its settings by `change` in another process, holding the lock for `holdMs` as `racer` does. */
+const settingsRacer = (at: string, change: object, holdMs: number) =>
+	Bun.spawn(["bun", path.join(import.meta.dir, "store-racer.ts"), "--settings", at, JSON.stringify(change), String(holdMs)], { stdout: "pipe", stderr: "pipe" });
+
 /** Waits until `run` says it holds the lock. */
 async function holding(run: ReturnType<typeof racer>): Promise<void> {
 	const reader = run.stdout.getReader();
@@ -125,21 +129,45 @@ describe("the looks store", () => {
 });
 
 describe("the settings store", () => {
-	test("shows the strip until it is turned off, and later sessions read the setting", () => {
+	test("shows the strip and every project until changed, and later sessions read the settings", () => {
 		const at = file("settings.json");
-		expect(settingsFile(at).read()).toEqual({ strip: true });
-		settingsFile(at).write({ strip: false });
-		expect(settingsFile(at).read()).toEqual({ strip: false });
-		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ strip: false });
+		expect(settingsFile(at).read()).toEqual({ strip: true, project: null });
+		settingsFile(at).update({ strip: false });
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: null });
+		settingsFile(at).update({ project: "spoon" });
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: "spoon" });
+		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ strip: false, project: "spoon" });
+		settingsFile(at).update({ project: null });
+		expect(JSON.parse(readFileSync(at, "utf8"))).toEqual({ strip: false, project: null });
+	});
+
+	test("a file from before projects reads as every project, and keeps its strip", () => {
+		const at = file("settings.json");
+		settingsFile(at).update({ strip: true });
+		writeFileSync(at, JSON.stringify({ strip: false }));
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: null });
 	});
 
 	test("a file that does not parse reads as the defaults, and a write that fails throws", () => {
 		const at = file("settings.json");
-		settingsFile(at).write({ strip: false });
+		settingsFile(at).update({ strip: false });
 		writeFileSync(at, JSON.stringify({ strip: "no" }));
-		expect(settingsFile(at).read()).toEqual({ strip: true });
+		expect(settingsFile(at).read()).toEqual({ strip: true, project: null });
+		writeFileSync(at, JSON.stringify({ strip: false, project: 7 }));
+		expect(settingsFile(at).read()).toEqual({ strip: true, project: null });
 		// A file where the directory should be cannot hold the settings.
 		const blocked = path.join(at, "settings.json");
-		expect(() => settingsFile(blocked).write({ strip: false })).toThrow();
+		expect(() => settingsFile(blocked).update({ strip: false })).toThrow();
+	});
+
+	test("a session that changes a setting while another holds the lock waits its turn, so both changes stay", async () => {
+		const at = file("settings.json");
+		settingsFile(at).update({ strip: true });
+		const first = settingsRacer(at, { project: "spoon" }, 300);
+		await holding(first);
+		// The first is between its read and its write, so without the lock one of the two changes is lost.
+		const second = settingsRacer(at, { strip: false }, 0);
+		expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: "spoon" });
 	});
 });

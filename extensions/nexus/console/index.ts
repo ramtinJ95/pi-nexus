@@ -3,17 +3,21 @@
  * pi's own selectors do. A thread fills the screen as an overlay. Each view gets everything through the nexus CLI.
  *
  * The person moves through the views as through a browser's history: opening a thread from the picker, or another
- * thread from a thread's picker, goes forward, and back returns to the thread or picker they came from.
+ * thread from a thread's picker, goes forward, and back returns to the thread or picker they came from. The project
+ * picker scopes the thread picker to one project, or every project, and its scope outlives the console.
  */
 import { copyToClipboard, getMarkdownTheme, SettingsManager, type ExtensionUIContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { listNodes, listProjects, listThreads, previewPort, sendText, showThread, startThread, unpreviewPort, type Nexus } from "../cli.ts";
+import { addProject, listNodes, listProjects, listThreads, previewPort, sendText, showThread, startThread, unpreviewPort, type Nexus } from "../cli.ts";
 import type { Action } from "../commands.ts";
 import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
 import type { NodeSummary, ThreadRow } from "../contract.ts";
+import { inScope, type Scope } from "../scope.ts";
 import type { Viewed } from "../store.ts";
 import { isClosed, noteParked, startArgs, type Parked } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
+import { ProjectFormView } from "./project-form.ts";
+import { ProjectPicker, type ProjectEnd } from "./project-picker.ts";
 import { StartFormView } from "./start-form.ts";
 import { ThreadScreen, type Draft, type ScreenEnd } from "./thread-screen.ts";
 import type { Display } from "./transcript.ts";
@@ -90,12 +94,15 @@ const nodesOrError = (nexus: Nexus, signal: AbortSignal) =>
 
 /**
  * A view in the console's history. A picker opened from a thread is `switching`: what it opens takes its place, so
- * back from that thread returns to the one the picker was opened from. `at` is the thread a picker selects.
+ * back from that thread returns to the one the picker was opened from. `at` is the thread a picker selects. The
+ * project picker, and the form that adds a project, leave the history once a project is chosen.
  */
 type Place =
 	| { kind: "picker"; switching: boolean; at?: string }
 	| { kind: "thread"; id: string }
-	| { kind: "start"; initial: { project?: string; title?: string } };
+	| { kind: "start"; initial: { project?: string; title?: string } }
+	| { kind: "projects" }
+	| { kind: "new-project" };
 
 /** The thread whose agent is working, the most recently active first, which `/nexus` opens on. */
 function workingThread(threads: readonly ThreadRow[]): string | undefined {
@@ -112,6 +119,8 @@ export class Console {
 		private readonly viewed: Viewed,
 		/** The threads seen parked, which the open thread's watch keeps up to date. */
 		private readonly parked: Parked,
+		/** The project whose threads the picker shows, which the project picker changes. */
+		private readonly scope: Scope,
 		/** Says what went wrong outside a view, such as a look that could not be recorded. */
 		private readonly warn: (message: string) => void,
 		private readonly display: (cwd: string) => Display = userDisplay,
@@ -155,13 +164,13 @@ export class Console {
 	}
 
 	/**
-	 * `/nexus`: the working thread with the picker under it, so back shows every thread, or the picker alone when no
-	 * agent works. False when this pi cannot show them.
+	 * `/nexus`: the working thread of the project shown with the picker under it, so back shows the project's threads,
+	 * or the picker alone when no agent works there. False when this pi cannot show them.
 	 */
 	async browse(ui: ExtensionUIContext, cwd: string): Promise<boolean> {
 		// The picker reads the threads again and says why it could not.
 		const threads = await listThreads(this.nexus, [], this.closed).catch(() => []);
-		const working = workingThread(threads);
+		const working = workingThread(inScope(threads, this.scope.project));
 		const picker: Place = { kind: "picker", switching: false, ...(working ? { at: working } : {}) };
 		return this.navigate(ui, cwd, working ? [picker, { kind: "thread", id: working }] : [picker]);
 	}
@@ -185,6 +194,17 @@ export class Console {
 				if (place.kind === "picker" && place.switching) history.pop();
 				history.push(next);
 			};
+			/**
+			 * Leaves the project picker, and the form above it, once a project is chosen, for that project's threads: the
+			 * picker they came from, or from a thread a picker that switches from it, as t opens.
+			 */
+			const chosen = (project: string | null) => {
+				this.scope.set(project);
+				while (history.at(-1)?.kind === "projects" || history.at(-1)?.kind === "new-project") history.pop();
+				const from = history.at(-1);
+				if (from?.kind === "thread") history.push({ kind: "picker", switching: true, at: from.id });
+				else if (from?.kind !== "picker") history.push({ kind: "picker", switching: false });
+			};
 			switch (place.kind) {
 				case "picker": {
 					const shown = await this.custom<PickerEnd>(ui, (tui, theme, _keybindings, done) => this.picker(tui, theme, done, place.at));
@@ -194,6 +214,7 @@ export class Console {
 						place.at = end.thread;
 						forward({ kind: "thread", id: end.thread });
 					} else if (end.kind === "new") forward({ kind: "start", initial: end.project === undefined ? {} : { project: end.project } });
+					else if (end.kind === "projects") history.push({ kind: "projects" });
 					else if (end.kind === "back") back();
 					else history.length = 0;
 					break;
@@ -210,11 +231,40 @@ export class Console {
 					if (end.kind === "back") back();
 					else if (end.kind === "close") history.length = 0;
 					else if (end.kind === "threads") history.push({ kind: "picker", switching: true, at: place.id });
+					else if (end.kind === "projects") history.push({ kind: "projects" });
 					else history.push({ kind: "start", initial: { project: end.project, title: end.title } });
 					break;
 				}
+				case "projects": {
+					const shown = await this.custom<ProjectEnd>(ui, (tui, theme, _keybindings, done) => this.projectPicker(tui, theme, done));
+					if (shown === undefined) return false;
+					const end = shown.result;
+					if (end.kind === "cancel") back();
+					else if (end.kind === "new") history.push({ kind: "new-project" });
+					else chosen(end.project);
+					break;
+				}
+				case "new-project": {
+					const nodes = await nodesOrError(this.nexus, this.closed);
+					const shown = await this.custom<string | null>(ui, (tui, theme, _keybindings, done) =>
+						new ProjectFormView({
+							tui,
+							theme,
+							nodes,
+							add: async (form) => done((await addProject(this.nexus, form, this.closed)).id),
+							cancel: () => done(null),
+						}),
+					);
+					if (shown === undefined) return false;
+					// Cancelling goes back to the project picker.
+					if (shown.result === null) back();
+					else chosen(shown.result);
+					break;
+				}
 				case "start": {
+					const asked = this.scope.project;
 					const [projects, nodes] = await Promise.all([listProjects(this.nexus, this.closed), nodesOrError(this.nexus, this.closed)]);
+					this.scope.check(projects, asked);
 					const shown = await this.custom<string | null>(ui, (tui, theme, keybindings, done) =>
 						new StartFormView({
 							tui,
@@ -222,7 +272,8 @@ export class Console {
 							keybindings,
 							projects,
 							nodes,
-							initial: place.initial,
+							// A form opened with no project starts on the project shown.
+							initial: { ...place.initial, project: place.initial.project ?? this.scope.project ?? undefined },
 							start: async (form) => done((await startThread(this.nexus, startArgs(form), this.closed)).id),
 							cancel: () => done(null),
 						}),
@@ -253,13 +304,15 @@ export class Console {
 		const begin = inOrder();
 		const load = async () => {
 			const current = begin();
+			const asked = this.scope.project;
 			try {
 				const [threads, projects] = await Promise.all([
 					listThreads(this.nexus, ["--all"], signal),
 					listProjects(this.nexus, signal).catch((err: unknown) => err as Error),
 				]);
 				if (signal.aborted || !current()) return;
-				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked });
+				if (Array.isArray(projects)) this.scope.check(projects, asked);
+				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked }, this.scope.project);
 				if (!Array.isArray(projects)) picker.setError(`The projects could not be read, so only projects with threads show: ${message(projects)}`);
 			} catch (err) {
 				if (!signal.aborted && current()) picker.setError(`The threads could not be read: ${message(err)}`);
@@ -273,6 +326,21 @@ export class Console {
 				stop.abort();
 			},
 		});
+	}
+
+	private projectPicker(tui: TUI, theme: Theme, done: (end: ProjectEnd) => void) {
+		const stop = new AbortController();
+		const asked = this.scope.project;
+		const picker = new ProjectPicker(tui, theme, done, asked);
+		listProjects(this.nexus, AbortSignal.any([stop.signal, this.closed])).then(
+			(projects) => {
+				if (stop.signal.aborted) return;
+				this.scope.check(projects, asked);
+				picker.setProjects(projects);
+			},
+			(err: unknown) => stop.signal.aborted || picker.setError(`The projects could not be read: ${message(err)}`),
+		);
+		return Object.assign(picker, { dispose: () => stop.abort() });
 	}
 
 	private screen(tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (end: ScreenEnd) => void, cwd: string, thread: string) {

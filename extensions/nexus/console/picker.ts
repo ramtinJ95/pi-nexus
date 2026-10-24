@@ -1,6 +1,6 @@
 /**
  * The thread picker, in pi's selector look: threads grouped by project, open ones first, the archived and deleted
- * ones folded, with the dashboard's overview columns. A thread whose pylon failed says it needs you, and one whose
+ * ones folded, with the dashboard's overview columns. It shows the project chosen with p, or every project. A thread whose pylon failed says it needs you, and one whose
  * agent did something since you last looked says it is new.
  *
  * Its keys are vim's, as the thread view's are: j and k move, / filters as pi's session picker does when you type,
@@ -9,17 +9,18 @@
 import { DynamicBorder, rawKeyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Project, ThreadRow } from "../contract.ts";
+import { inScope, scopeLabel } from "../scope.ts";
 import { lastActivityAt } from "../thread.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
 import { ago, attention, badge, groups, pickerRows, span, threadState, toneColor, type Group, type Marks, type PickerRow, type Tone } from "./model.ts";
 
-/** `back` returns to where the picker was opened from; `close` leaves the console. */
-export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "back" } | { kind: "close" };
+/** `back` returns to where the picker was opened from; `projects` chooses the project shown; `close` leaves the console. */
+export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "projects" } | { kind: "back" } | { kind: "close" };
 
 const selectable = (row: PickerRow) => row.kind === "thread" || row.kind === "fold" || row.kind === "new";
 const visibleRows = 14;
 
-type Command = "down" | "up" | "halfDown" | "halfUp" | "top" | "bottom" | "open" | "new" | "filter" | "refresh" | "help" | "back" | "close";
+type Command = "down" | "up" | "halfDown" | "halfUp" | "top" | "bottom" | "open" | "new" | "projects" | "filter" | "refresh" | "help" | "back" | "close";
 
 /** The Claude Code Nexus mod's keys, with vim's own where pi can read them, as the thread view's are. */
 const pickerKeys: readonly Binding<Command>[] = [
@@ -31,6 +32,7 @@ const pickerKeys: readonly Binding<Command>[] = [
 	{ keys: ["G", "ge", "end"], command: "bottom", help: "the last row" },
 	{ keys: ["enter", "o", "l"], command: "open", help: "open the thread, or unfold its project's archived threads" },
 	{ keys: ["n", "ctrl+n"], command: "new", help: "start a thread, on the selected thread's project" },
+	{ keys: ["p"], command: "projects", help: "choose the project whose threads show, or add one" },
 	{ keys: ["f", "/"], command: "filter", help: "filter by title or ID; enter keeps the filter, esc clears it" },
 	{ keys: ["r"], command: "refresh", help: "read the threads again" },
 	{ keys: ["s", "?"], command: "help", help: "this help" },
@@ -49,6 +51,8 @@ export class Picker implements Component, Focusable {
 	private filtering = false;
 	private help = false;
 	private error: string | undefined;
+	/** The project shown, or null for every project. */
+	private scope: string | null = null;
 	private _focused = false;
 
 	constructor(
@@ -71,11 +75,13 @@ export class Picker implements Component, Focusable {
 		this.search.focused = value && this.filtering;
 	}
 
-	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], marks: Marks): void {
+	/** The threads, and the projects, of which only `scope`'s show unless it is null. */
+	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], marks: Marks, scope: string | null): void {
 		const current = this.rows[this.selected];
 		const keep = this.at ?? (current?.kind === "thread" ? current.thread.id : undefined);
 		this.at = undefined;
-		this.groups = groups(threads, projects);
+		this.scope = scope;
+		this.groups = groups(inScope(threads, scope), scope === null ? projects : projects.filter((p) => p.id === scope));
 		this.marks = marks;
 		this.error = undefined;
 		this.layout();
@@ -172,6 +178,8 @@ export class Picker implements Component, Focusable {
 				const project = this.projectOf(row);
 				return this.done({ kind: "new", ...(project ? { project } : {}) });
 			}
+			case "projects":
+				return this.done({ kind: "projects" });
 			case "filter":
 				this.setFiltering(true);
 				break;
@@ -260,7 +268,7 @@ export class Picker implements Component, Focusable {
 		const mode = t.bold(this.filtering ? t.fg("warning", "FILTER") : t.fg("accent", "NORMAL"));
 		if (this.help) return `${mode}  ${rawKeyHint("any key", "closes the help")}`;
 		if (this.filtering) return [mode, rawKeyHint("type", "filter"), rawKeyHint("↑↓", "navigate"), rawKeyHint("enter", "keep the filter"), rawKeyHint("esc", "clear it")].join("  ");
-		return [mode, rawKeyHint("j/k", "navigate"), k("open", "open or unfold"), k("new", "new thread"), k("filter", "filter"), k("help", "keys"), k("close", "close")].join("  ");
+		return [mode, rawKeyHint("j/k", "navigate"), k("open", "open or unfold"), k("new", "new thread"), k("projects", "project"), k("filter", "filter"), k("help", "keys"), k("close", "close")].join("  ");
 	}
 
 	render(width: number): string[] {
@@ -268,7 +276,7 @@ export class Picker implements Component, Focusable {
 		const border = new DynamicBorder();
 		const query = this.search.getValue();
 		const search = this.filtering ? this.search.render(width - 2).map((l) => ` ${l}`) : query === "" ? [] : [` ${t.fg("muted", `filter: ${query}`)}`];
-		const lines = [...border.render(width), "", ` ${t.fg("accent", t.bold("Nexus threads"))}`, ...search, ""];
+		const lines = [...border.render(width), "", ` ${t.fg("accent", t.bold("Nexus threads"))}${t.fg("dim", " · ")}${t.fg("muted", scopeLabel(this.scope))}`, ...search, ""];
 		if (this.error) lines.push(...wrapTextWithAnsi(this.error, Math.max(10, width - 2)).map((line) => ` ${t.fg("error", line)}`), "");
 		if (this.help) {
 			const rows = helpLines(pickerKeys);
