@@ -679,6 +679,51 @@ describe("console", () => {
 			const result = (await n.tool("nexus_threads", {})) as { details: { project: string }[] };
 			expect(result.details.map((t) => t.project)).toEqual(["acme", "acme", "acme", "spoon"]);
 		});
+
+		describe("a scratch project", () => {
+			const sketch = { id: "sketch", repoUrl: null, defaultNode: "nuc", defaultBranch: "trunk" };
+			const sketchThread = row("th-5c00a0000001", { project: "sketch", title: "Sketch work", lastAgentActivityAt: 1_000 });
+			const withScratch: Scenario = { ...scenario, responses: { ...scenario.responses, projects: [...projects, sketch], threads: [...idleThreads.slice(0, 3), sketchThread] } };
+
+			test("shows as scratch in the project picker, and its start form says it starts an empty repository", async () => {
+				const n = load(withScratch);
+				const done = n.run("");
+				await n.until(() => n.shown.length === 1 && n.text().includes("Nexus threads · All projects") && n.text().includes("Sketch work"), "the picker");
+				n.press("p");
+				await n.until(() => n.shown.length === 2 && n.text().includes("sketch"), "the project picker");
+				expect(n.text()).toMatch(/acme +git@example\.com:acme\n/);
+				expect(n.text()).toMatch(/ {3}sketch +scratch\n/);
+				expect(n.text()).not.toContain("null");
+				n.press("j", "j", "\r");
+				await n.until(() => n.shown.length === 3 && n.text().includes("Nexus threads · sketch") && n.text().includes("Sketch work"), "the picker on sketch");
+				n.press("n");
+				await n.until(() => n.shown.length === 4 && n.text().includes("Start a thread"), "the start form");
+				const form = n.text();
+				expect(form).toContain("[sketch]");
+				expect(form).toMatch(/\n {12}scratch\n/);
+				expect(form).toContain("Boots a pylon on nuc and starts an empty repository on trunk.");
+				expect(form).not.toContain("null");
+				expect(form).not.toContain("checks out");
+				n.shown[3]!.done(null);
+				await n.until(() => n.shown.length === 5, "the picker again");
+				n.press("q");
+				await done;
+			});
+
+			test("/nexus project <id> shows it, and the status line counts its threads", async () => {
+				const n = load(withScratch, { settings: memorySettings() });
+				n.start();
+				await n.run("project sketch");
+				expect(n.notified.at(-1)).toEqual(["Nexus shows the project sketch.", "info"]);
+				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working", "the summary of sketch");
+			});
+
+			test("a project add whose reply is a scratch project says so as the CLI does", async () => {
+				const n = load({ ...withScratch, responses: { ...withScratch.responses, project: { ...sketch, id: "pad" } } });
+				await n.run("project add pad git@github.com:me/pad.git --node nuc");
+				expect(n.notified.at(-1)).toEqual(["Added the scratch project pad on nuc. Nexus shows its threads.", "info"]);
+			});
+		});
 	});
 
 	test("a reply without a field the console needs fails as a contract error", async () => {
@@ -749,6 +794,14 @@ describe("the contract", () => {
 		expect(await listProjects(nexus({ responses: { projects: [added] } }))).toEqual([added]);
 		const { defaultNode: _, ...bare } = added;
 		await expect(addProject(nexus({ responses: { project: bare } }), add)).rejects.toThrow("nexus project add has no defaultNode, which pi-nexus needs");
+	});
+
+	test("a scratch project's repo URL is null, and a project still needs the field", async () => {
+		const scratch = { id: "sketch", repoUrl: null, defaultBranch: "main", defaultNode: "firebat" };
+		expect(await listProjects(nexus({ responses: { projects: [projects[0], scratch] } }))).toEqual([projects[0]!, scratch]);
+		const { repoUrl: _, ...bare } = scratch;
+		await expect(listProjects(nexus({ responses: { projects: [bare] } }))).rejects.toThrow("nexus projects has no [0].repoUrl, which pi-nexus needs");
+		await expect(listProjects(nexus({ responses: { projects: [{ ...scratch, repoUrl: 7 }] } }))).rejects.toThrow("[0].repoUrl is none of the values or shapes the contract allows");
 	});
 
 	test("a project add passes its ID and repo URL after --, so neither reads as a flag", async () => {

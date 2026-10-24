@@ -5,7 +5,7 @@
 import { CustomEditor, DynamicBorder, getSelectListTheme, rawKeyHint, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { Input, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { NodeSummary, Project } from "../contract.ts";
-import { startHint, type StartForm } from "./model.ts";
+import { repoOf, startHint, type StartForm } from "./model.ts";
 
 type Field = "title" | "project" | "node" | "branch" | "message";
 const fields: readonly Field[] = ["title", "project", "node", "branch", "message"];
@@ -162,7 +162,7 @@ export class StartFormView implements Component, Focusable {
 			"",
 			` ${label("title", "Title")}${this.title.render(Math.max(10, width - 12))[0] ?? ""}`,
 			` ${label("project", "Project")}${this.o.projects.length === 0 ? t.fg("error", "No projects yet.") : choices("project", this.o.projects.map((p) => p.id), this.project)}`,
-			...(project ? [`            ${t.fg("dim", project.repoUrl)}`] : []),
+			...(project ? [`            ${t.fg("dim", repoOf(project))}`] : []),
 			` ${label("node", "Node")}${choices("node", nodes, this.node)}`,
 			...(this.o.nodes instanceof Error ? [`            ${t.fg("dim", `Only the project default, since the nodes are unavailable: ${this.o.nodes.message}`)}`] : []),
 			` ${label("branch", "Branch")}${this.branch.getValue() === "" && this.field !== "branch" ? t.fg("dim", project?.defaultBranch ?? "") : branch}`,

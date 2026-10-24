@@ -124,7 +124,13 @@ export const ThreadDetail = Type.Object({
 export type ThreadDetail = Static<typeof ThreadDetail>;
 
 /** A project as `projects` lists it and `project add` prints the one it added. */
-export const Project = Type.Object({ id: Type.String(), repoUrl: Type.String(), defaultNode: Type.String(), defaultBranch: Type.String() });
+export const Project = Type.Object({
+	id: Type.String(),
+	/** Null for a scratch project, whose threads start from an empty repository on the branch, with no remote. */
+	repoUrl: Nullable(Type.String()),
+	defaultNode: Type.String(),
+	defaultBranch: Type.String(),
+});
 export type Project = Static<typeof Project>;
 
 export const NodeSummary = Type.Object({ name: Type.String(), state: Type.Union([Type.Literal("online"), Type.Literal("offline")]) });
