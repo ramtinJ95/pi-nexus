@@ -64,6 +64,13 @@ describe("/nexus arguments", () => {
 		expect(invalid("unpublish 0123 8080 9000")).toStartWith("unpublish takes 2 arguments");
 	});
 
+	test("strip takes on or off", () => {
+		expect(parseCommand("strip on")).toEqual({ name: "strip", on: true });
+		expect(parseCommand("strip off")).toEqual({ name: "strip", on: false });
+		expect(invalid("strip")).toStartWith("strip needs on or off\n/nexus");
+		expect(invalid("strip maybe")).toStartWith("strip needs on or off\n/nexus");
+	});
+
 	test("mistakes name the problem and show usage", () => {
 		expect(invalid("new acme --title")).toStartWith("new needs a title after --title\n/nexus");
 		expect(invalid("open")).toStartWith("open needs a thread");

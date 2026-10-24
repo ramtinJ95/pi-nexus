@@ -2,12 +2,15 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { createNexus, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
+import { chips, summary } from "./console/model.ts";
+import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
 import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
-import type { Thread } from "./contract.ts";
-import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, workingCount, type ThreadView } from "./thread.ts";
+import type { ThreadRow } from "./contract.ts";
+import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
+import { defaultSettingsFile, defaultViewedFile, settingsFile, viewedFile, type SettingsStore, type Viewed } from "./store.ts";
 
 const statusEveryMs = 30_000;
 
@@ -33,15 +36,21 @@ class NexusSession {
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private readonly follows = new Map<string, { stop: AbortController; view: ThreadView }>();
 	/** The threads last listed, for completion and titles. */
-	threads: Thread[] = [];
+	threads: ThreadRow[] = [];
+	/** Whether the strip of threads that need you, have news or work shows above the editor, read on first use. */
+	private strip: boolean | undefined;
 	private readonly console: Console;
+	private readonly viewed: Viewed;
+	private readonly settings: SettingsStore;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly nexus: Nexus,
 		display: (cwd: string) => Display,
+		stores: Stores,
 	) {
-		this.console = new Console(nexus, this.closed.signal, display);
+		({ viewed: this.viewed, settings: this.settings } = stores);
+		this.console = new Console(nexus, this.closed.signal, this.viewed, (message) => this.ui?.notify(message, "warning"), display);
 	}
 
 	attach(ui: ExtensionUIContext): void {
@@ -54,7 +63,12 @@ class NexusSession {
 		if (this.closed.signal.aborted) return;
 		try {
 			this.threads = await listThreads(this.nexus, [], this.closed.signal);
-			this.ui?.setStatus("nexus", `nexus ${workingCount(this.threads)} working`);
+			const seen = this.viewed.read();
+			this.ui?.setStatus("nexus", summary(this.threads, seen));
+			this.strip ??= this.settings.read().strip;
+			const shown = this.strip ? chips(this.threads, seen) : [];
+			const now = Date.now();
+			this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now) : undefined);
 		} catch (err) {
 			if (!this.closed.signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
 		}
@@ -160,6 +174,14 @@ class NexusSession {
 				if (stopped === 0) ctx.ui.notify("Not following that.", "info");
 				return;
 			}
+			case "strip":
+				this.strip = command.on;
+				try {
+					this.settings.write({ ...this.settings.read(), strip: command.on });
+				} catch (err) {
+					ctx.ui.notify(`The strip is ${command.on ? "on" : "off"} for this session only, since its setting could not be saved: ${errorText(err)}`, "warning");
+				}
+				return this.refresh();
 			case "unpublish": {
 				const thread = await id(command.thread);
 				await unpreviewPort(nexus, thread, command.port, signal);
@@ -184,13 +206,25 @@ class NexusSession {
 		clearInterval(this.timer);
 		this.ui?.setStatus("nexus", undefined);
 		this.ui?.setWidget("nexus", undefined);
+		this.ui?.setWidget("nexus-strip", undefined);
 		this.ui = undefined;
 	}
 }
 
-/** `display` reads pi's display settings, which a test replaces so it never reads the user's own. */
-export default function nexusExtension(pi: ExtensionAPI, nexus: Nexus = createNexus(), display: (cwd: string) => Display = userDisplay) {
-	const session = new NexusSession(pi, nexus, display);
+/** When each thread was last looked at, and the console's settings, kept in pi's agent directory. */
+interface Stores {
+	viewed: Viewed;
+	settings: SettingsStore;
+}
+
+/** `display` reads pi's display settings, and a test replaces the stores so it never touches the user's own. */
+export default function nexusExtension(
+	pi: ExtensionAPI,
+	nexus: Nexus = createNexus(),
+	display: (cwd: string) => Display = userDisplay,
+	stores: Stores = { viewed: viewedFile(defaultViewedFile()), settings: settingsFile(defaultSettingsFile()) },
+) {
+	const session = new NexusSession(pi, nexus, display, stores);
 	pi.registerEntryRenderer(noteType, renderNote);
 	for (const tool of nexusTools(nexus)) {
 		pi.registerTool({

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
 import { createNexus } from "../extensions/nexus/cli.ts";
+import { memoryStores } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -37,7 +38,7 @@ function load(scenario: Scenario, { answer }: { answer?: string } = { answer: "D
 			setWidget: (key: string, lines: string[] | undefined) => widgets.set(key, lines),
 		},
 	} as unknown as ExtensionCommandContext;
-	nexusExtension(pi, createNexus(fake.bin));
+	nexusExtension(pi, createNexus(fake.bin), undefined, memoryStores());
 	cleanups.push(() => handlers.get("session_shutdown")?.(), fake.cleanup);
 	const shutdown = () => handlers.get("session_shutdown")!();
 	const tool = (name: string, params: object) => tools.find((t) => t.name === name)!.execute("call-1", params, undefined, undefined, ctx);

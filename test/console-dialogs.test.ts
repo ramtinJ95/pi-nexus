@@ -3,6 +3,8 @@ import { Picker, type PickerEnd } from "../extensions/nexus/console/picker.ts";
 import { StartFormView } from "../extensions/nexus/console/start-form.ts";
 import type { StartForm } from "../extensions/nexus/console/model.ts";
 import { asked, fakeTui, keybindings, piTheme, plain } from "./console-fixture.ts";
+import type { ThreadRow } from "../extensions/nexus/contract.ts";
+import type { Seen } from "../extensions/nexus/store.ts";
 import { idA, idB, idC, row } from "./fixtures.ts";
 
 const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", up: "\x1b[A", right: "\x1b[C", tab: "\t", ctrlN: "\x0e" };
@@ -18,12 +20,13 @@ describe("picker", () => {
 		row(idC, { project: "nexus", title: "Old work", status: "archived", desired: "deleted", pylon: { node: "firebat", actualState: "absent", failed: null } }),
 	];
 
-	function open(width = 140) {
+	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads) {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000);
 		picker.focused = true;
-		picker.setThreads(threads, projects);
-		return { picker, ends, text: () => plain(picker.render(width)), press: (k: string) => picker.handleInput(k) };
+		picker.setThreads(list, projects, seen);
+		const press = (...input: string[]) => input.forEach((k) => picker.handleInput(k));
+		return { picker, ends, text: () => plain(picker.render(width)), press };
 	}
 
 	test("shows each project's threads with the overview columns and the closed ones folded", () => {
@@ -58,27 +61,110 @@ describe("picker", () => {
 		expect(q.text()).toContain("Old work");
 	});
 
-	test("typing filters, Esc clears the filter and then closes", () => {
+	test("/ or f filters, Enter keeps the filter for j and k, and Esc clears it before it goes back", () => {
 		const p = open();
-		for (const ch of "docs") p.press(ch);
+		p.press("/", ..."docs");
 		expect(p.text()).toContain("Docs pass");
 		expect(p.text()).not.toContain("Fix the probe retry");
 		p.press(keys.enter);
+		expect(p.text()).toContain("filter: docs");
+		p.press("o");
 		expect(p.ends).toEqual([{ kind: "open", thread: idB }]);
 		const q = open();
-		for (const ch of "zzz") q.press(ch);
+		q.press("/", ..."zzz");
 		expect(q.text()).toContain("No thread matches.");
 		q.press(keys.escape);
 		expect(q.text()).toContain("Fix the probe retry");
 		q.press(keys.escape);
+		expect(q.ends).toEqual([{ kind: "back" }]);
+		const r = open();
+		r.press("f");
+		expect(r.text()).toMatch(/\n FILTER {2}/);
+		r.press("x", keys.enter);
+		expect(r.text()).toMatch(/\n NORMAL {2}/);
+		r.press(keys.escape);
+		expect(r.ends).toEqual([]);
+		expect(r.text()).not.toContain("filter:");
+		r.press(keys.escape);
+		expect(r.ends).toEqual([{ kind: "back" }]);
+	});
+
+	test("vim's keys move and open, q closes, and the arrows still work", () => {
+		const p = open();
+		p.press("j");
+		expect(p.text()).toMatch(/→ ● Fix the probe retry/);
+		p.press("j", "k", keys.down, keys.up);
+		expect(p.text()).toMatch(/→ ● Fix the probe retry/);
+		p.press("G");
+		expect(p.text()).toMatch(/→ ▸ 1 archived/);
+		p.press("g", "g");
+		expect(p.text()).toContain("→ + New thread");
+		p.press("g", "e");
+		expect(p.text()).toMatch(/→ ▸ 1 archived/);
+		p.press("u");
+		expect(p.text()).toContain("→ + New thread");
+		p.press("j", "l");
+		expect(p.ends).toEqual([{ kind: "open", thread: idA }]);
+		p.press("d", "u", "j", "o");
+		expect(p.ends).toEqual([{ kind: "open", thread: idA }, { kind: "open", thread: idA }]);
+		const q = open();
+		q.press("q");
 		expect(q.ends).toEqual([{ kind: "close" }]);
 	});
 
-	test("ctrl+n starts a thread on the selected thread's project", () => {
+	test("? lists the keys, and any key closes the list without acting", () => {
 		const p = open();
-		p.press(keys.down);
+		p.press("?");
+		expect(p.text()).toContain("j/↓");
+		expect(p.text()).toContain("filter by title or ID");
+		expect(p.text()).not.toContain("Fix the probe retry");
+		p.press("q");
+		expect(p.ends).toEqual([]);
+		expect(p.text()).toContain("Fix the probe retry");
+	});
+
+	test("s lists the keys too, and r reads the threads again", () => {
+		let reads = 0;
+		const picker = new Picker(fakeTui(), piTheme(), () => {}, () => asked + 60_000, undefined, () => reads++);
+		picker.setThreads(threads, projects, { since: 0, threads: {} });
+		picker.handleInput("s");
+		expect(plain(picker.render(140))).toContain("read the threads again");
+		picker.handleInput("j");
+		picker.handleInput("r");
+		expect(reads).toBe(1);
+	});
+
+	test("n and ctrl+n start a thread on the selected thread's project", () => {
+		const p = open();
+		p.press(keys.down, "n");
 		p.press(keys.ctrlN);
-		expect(p.ends).toEqual([{ kind: "new", project: "nexus" }]);
+		expect(p.ends).toEqual([
+			{ kind: "new", project: "nexus" },
+			{ kind: "new", project: "nexus" },
+		]);
+	});
+
+	test("a failed pylon needs you, and an agent that answered since the last look is new", () => {
+		const failed = row(idB, { project: "nexus", title: "Docs pass", createdAt: asked - 1, pylon: { node: "firebat", actualState: "failed", failed: "git clone: denied" } });
+		const answered = row(idC, { project: "nexus", title: "Answered", createdAt: asked - 2, lastAgentActivityAt: asked + 30_000 });
+		const looked = row("th-00000000000d", { project: "nexus", title: "Looked at", createdAt: asked - 3, lastAgentActivityAt: asked + 30_000 });
+		const list = [threads[0]!, failed, answered, looked];
+		const out = open(140, { since: asked, threads: { "th-00000000000d": asked + 40_000 } }, list).text();
+		expect(out).toMatch(/● Docs pass needs you +failed/);
+		expect(out).toMatch(/● Answered new /);
+		expect(out).not.toMatch(/Looked at new/);
+		// A working agent is not done yet, so its thread is not new.
+		expect(out).not.toMatch(/Fix the probe retry new/);
+		// Nobody has looked since the store began, so an answer before then is not new.
+		expect(open(140, { since: asked + 31_000, threads: {} }, list).text()).not.toMatch(/Answered new/);
+	});
+
+	test("opens on the thread it is given, once the threads load", () => {
+		const ends: PickerEnd[] = [];
+		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000, idB);
+		picker.setThreads(threads, projects, { since: 0, threads: {} });
+		picker.handleInput(keys.enter);
+		expect(ends).toEqual([{ kind: "open", thread: idB }]);
 	});
 
 	test("a failed read shows, and the threads it had stay", () => {

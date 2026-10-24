@@ -5,7 +5,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { Nexus } from "../extensions/nexus/cli.ts";
 import { Console } from "../extensions/nexus/console/index.ts";
 import type { WatchEvent } from "../extensions/nexus/contract.ts";
-import { detail, display, entries, fakeTui, keybindings, live, piTheme, plain, working } from "./console-fixture.ts";
+import { detail, display, entries, fakeTui, keybindings, live, memoryViewed, piTheme, plain, working } from "./console-fixture.ts";
 import { idA, reset, row, state } from "./fixtures.ts";
 
 afterEach(() => jest.useRealTimers());
@@ -50,7 +50,7 @@ function open() {
 	const n = heldNexus();
 	const closed = new AbortController();
 	const u = heldUi();
-	void new Console(n.nexus, closed.signal, display).thread(u.ui, "/tmp", idA);
+	void new Console(n.nexus, closed.signal, memoryViewed(), () => {}, display).thread(u.ui, "/tmp", idA);
 	n.emit(reset(idA, entries));
 	n.emit(state(idA, working));
 	n.emit({ type: "live", thread: idA, ...live });
@@ -102,9 +102,12 @@ describe("console over a session", () => {
 		jest.useFakeTimers();
 		const n = heldNexus();
 		const u = heldUi();
-		void new Console(n.nexus, new AbortController().signal, display).browse(u.ui, "/tmp");
+		void new Console(n.nexus, new AbortController().signal, memoryViewed(), () => {}, display).browse(u.ui, "/tmp");
+		// No agent works, so /nexus opens the picker.
+		n.of("threads")[0]!.answer([]);
+		await flush();
 		jest.advanceTimersByTime(5_000);
-		const [older, newer] = n.of("threads");
+		const [, older, newer] = n.of("threads");
 		for (const projects of n.of("projects")) projects.answer([]);
 		newer!.answer([row(idA, { title: "The newer list" })]);
 		await flush();

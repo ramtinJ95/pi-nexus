@@ -7,7 +7,7 @@ import { Console } from "../extensions/nexus/console/index.ts";
 import { ThreadScreen } from "../extensions/nexus/console/thread-screen.ts";
 import type { WatchEvent } from "../extensions/nexus/contract.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { detail, display, entries, fakeTui, keybindings, piTheme, plain, working } from "./console-fixture.ts";
+import { detail, display, entries, fakeTui, keybindings, memoryStores, memoryViewed, piTheme, plain, working } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, reset, state, threads } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -64,7 +64,7 @@ describe("a streaming answer", () => {
 				return new Promise(() => {});
 			},
 		};
-		void new Console(nexus, closed.signal, display).thread(ui as never, "/tmp", idA);
+		void new Console(nexus, closed.signal, memoryViewed(), () => {}, display).thread(ui as never, "/tmp", idA);
 		const text = () => plain(screen.render(100));
 
 		// The lines a poll prints together draw together, once.
@@ -94,7 +94,7 @@ describe("a streaming answer", () => {
 		emit(live(partialAfter(11)));
 		jest.advanceTimersByTime(200);
 		expect(text().split("\n").slice(0, 10).join("\n")).toBe(shown);
-		expect(text()).toMatch(/↓ \d+ more lines, pgdn to scroll/);
+		expect(text()).toMatch(/↓ \d+ more lines, G follows the end/);
 		screen.handleInput!("\x1b[6~");
 		screen.handleInput!("\x1b[6~");
 		screen.handleInput!("\x1b[6~");
@@ -157,7 +157,7 @@ describe("a streaming answer", () => {
 				},
 			},
 		} as unknown as ExtensionCommandContext;
-		nexusExtension(pi, createNexus(fake.bin), display);
+		nexusExtension(pi, createNexus(fake.bin), display, memoryStores());
 		cleanups.push(() => handlers.get("session_shutdown")?.());
 		void command(`open ${idA}`, ctx);
 		// The last frame comes once the committed answer lands, about 2.2 s in.
