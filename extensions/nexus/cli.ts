@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { NodeSummary, OpenedSession, parse, parseDetail, Preview, Project, SessionClosed, Thread, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -17,6 +17,8 @@ export interface Nexus {
 	watch(thread: string, onEvent: (event: WatchEvent) => void, signal: AbortSignal): Promise<void>;
 	/** Runs `nexus attach <thread> --json` on this process's terminal, and resolves once the person detaches. */
 	attach(thread: string): Promise<void>;
+	/** Runs `nexus --version` and returns what it printed, such as `nexus 0.8.0`. */
+	version(signal?: AbortSignal): Promise<string>;
 }
 
 export const defaultBin = () => process.env.NEXUS_BIN || "nexus";
@@ -111,6 +113,18 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 			});
 		},
 
+		version(signal) {
+			return new Promise((resolve, reject) => {
+				const child = spawn(bin, ["--version"], { stdio: ["ignore", "pipe", "pipe"], signal });
+				let stdout = "";
+				let stderr = "";
+				child.stdout.on("data", (chunk) => (stdout += chunk));
+				child.stderr.on("data", (chunk) => (stderr += chunk));
+				child.on("error", (err) => reject(err.name === "AbortError" ? err : spawnFailure(bin, err)));
+				child.on("close", (code) => (code === 0 ? resolve(stdout) : reject(failure(code, stderr))));
+			});
+		},
+
 		attach(thread) {
 			return new Promise((resolve, reject) => {
 				// The terminal is the CLI's, then ssh's. Its stderr goes on to the terminal as it comes, so ssh's prompts
@@ -159,7 +173,7 @@ export const sendText = (nexus: Nexus, thread: string, text: string, steer: bool
 	nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal);
 
 export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
-	parse(ThreadDetail, await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+	parseDetail(await nexus.run(["show", thread], signal), `nexus show ${thread}`);
 /** The `thread:port` pairs a publish or unpublish runs on, for each Nexus the session drives. */
 const portsChanging = new WeakMap<Nexus, Set<string>>();
 
@@ -231,10 +245,50 @@ export async function openSession(nexus: Nexus, thread: string, open: { harness?
 	}
 }
 
-/** Closes a session's pane, which ends its agent, and needs CLI 0.5.0. A pane already closed succeeds. */
-export async function closeSession(nexus: Nexus, thread: string, pane: string, signal?: AbortSignal): Promise<void> {
+/** `nexus 0.8.0` as [0, 8, 0], or null when it names no version. */
+export function parseVersion(printed: string): number[] | null {
+	const match = /^nexus (\d+)\.(\d+)\.(\d+)\b/.exec(printed.trim());
+	return match ? match.slice(1).map(Number) : null;
+}
+
+/** Whether `version` comes before `than`. */
+export const isOlder = (version: readonly number[], than: readonly number[]) => {
+	const at = version.findIndex((part, i) => part !== than[i]);
+	return at !== -1 && version[at]! < than[at]!;
+};
+
+/**
+ * The CLI versions read that were new enough for what asked, by Nexus. Only those are kept, so a CLI updated after a
+ * refusal is read again rather than refused from memory.
+ */
+const versionsRead = new WeakMap<Nexus, Map<string, number[]>>();
+
+/**
+ * Fails unless the CLI is `needed` or later, saying which version `doing` needs. A version that cannot be read
+ * fails too, since an older CLI could do the wrong thing.
+ */
+async function requireVersion(nexus: Nexus, needed: readonly number[], doing: string, signal?: AbortSignal): Promise<void> {
+	const wanted = needed.join(".");
+	const known = versionsRead.get(nexus) ?? new Map<string, number[]>();
+	versionsRead.set(nexus, known);
+	if (known.has(wanted)) return;
+	const printed = await nexus.version(signal);
+	const version = parseVersion(printed);
+	if (version === null) throw new NexusError("invalid", `${nexus.bin} --version printed no version (${JSON.stringify(printed.trim().slice(0, 80))}): ${doing} needs Nexus CLI ${wanted} or later`);
+	if (isOlder(version, needed)) throw new NexusError("invalid", `${nexus.bin} is ${version.join(".")}: ${doing} needs Nexus CLI ${wanted} or later (nexus --version)`);
+	known.set(wanted, version);
+}
+
+/**
+ * Closes a session by its `id`, which needs CLI 0.8.0. Closing a pane ends its agent, and closing a failed session
+ * drops it, so no wake tries it again. CLI 0.8.0 passes on at once the control plane's refusal of a paused session and
+ * its failure on a pane that is not open, which a wake may have moved, in their words. An older CLI is refused before it
+ * runs: it asks again for two minutes on a paused session, and a wake meanwhile would close it unasked.
+ */
+export async function closeSession(nexus: Nexus, thread: string, id: string, signal?: AbortSignal): Promise<void> {
+	await requireVersion(nexus, [0, 8, 0], "closing a session", signal);
 	try {
-		parse(SessionClosed, await nexus.run(["session close", "--", thread, pane], signal), "nexus session close");
+		parse(SessionClosed, await nexus.run(["session close", "--", thread, id], signal), "nexus session close");
 	} catch (err) {
 		throw newer(err, "session close", "closing a session", "0.5.0");
 	}

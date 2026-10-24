@@ -25,7 +25,10 @@ if (process.env.FAKE_NEXUS_PIDS) {
 	process.on("exit", () => appendFileSync(process.env.FAKE_NEXUS_PIDS, `${process.pid} exit\n`));
 }
 
-if (command === "attach") {
+if (command === "--version") {
+	// The CLI prints its version as text, without --json.
+	process.stdout.write(`nexus ${scenario.version ?? "0.8.0"}\n`);
+} else if (command === "attach") {
 	// The terminal is the attach's, and it prints nothing of its own. `attachSignal` stands in for Ctrl+C.
 	if (scenario.delayMs?.attach) await new Promise((resolve) => setTimeout(resolve, scenario.delayMs.attach));
 	if (scenario.attachSignal) process.kill(process.pid, scenario.attachSignal);

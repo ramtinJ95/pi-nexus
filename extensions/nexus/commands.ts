@@ -27,8 +27,8 @@ export type NexusCommand =
 	| { name: "scope"; project?: string | null }
 	| { name: "add-project"; id: string; repoUrl: string; node: string; branch?: string }
 	| { name: "session-open"; thread: string; harness?: string; title?: string }
-	/** Without `pane`, it asks which of the thread's sessions to close. */
-	| { name: "session-close"; thread: string; pane?: string }
+	/** `session` is a session's ID, which is its pane for a session in one. Without it, it asks which to close. */
+	| { name: "session-close"; thread: string; session?: string }
 	| { name: "attach"; thread: string }
 	| { name: Action; thread: string }
 	| { name: "help" };
@@ -49,7 +49,7 @@ export const usage = `/nexus                              the working thread ove
 /nexus project [id|all]              which project's threads show, or the one shown
 /nexus project add <id> <repo-url> --node <node> [--branch <branch>]
 /nexus session open <thread> [--harness claude-code|pi|shell] [--title T]
-/nexus session close <thread> [pane]  without a pane, asks which
+/nexus session close <thread> [id]  a session by its pane or ID, or asks which
 /nexus session attach <thread>       this terminal on the pylon's sessions, until you detach
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
@@ -228,8 +228,8 @@ function session([command, ...args]: readonly string[]): NexusCommand {
 			return { name: "session-open", thread: positional[0]!, ...flags };
 		}
 		case "close":
-			if (args.length === 0 || args.length > 2) throw invalid("session close needs a thread, and may name a pane");
-			return { name: "session-close", thread: args[0]!, ...(args[1] === undefined ? {} : { pane: args[1] }) };
+			if (args.length === 0 || args.length > 2) throw invalid("session close needs a thread, and may name a session's pane or ID");
+			return { name: "session-close", thread: args[0]!, ...(args[1] === undefined ? {} : { session: args[1] }) };
 		case "attach":
 			if (args.length !== 1) throw invalid("session attach needs a thread");
 			return { name: "attach", thread: args[0]! };
