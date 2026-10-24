@@ -54,13 +54,14 @@ function open(
 	let refreshes = 0;
 	let rewatches = 0;
 	const tui = fakeTui(rows, 100);
+	let clock = asked + 72_000;
 	const screen = new ThreadScreen({
 		tui,
 		theme: piTheme(),
 		keybindings: keybindings(),
 		display: display(),
 		thread: idA,
-		now: () => asked + 72_000,
+		now: () => clock,
 		done: (end) => ends.push(end),
 		actions: {
 			async send(text, steer, requestId) {
@@ -131,7 +132,7 @@ function open(
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 	/** Details as the console reads them, asked for now or at the earlier mark `askedAt`. */
 	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
-	return { screen, tui, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
+	return { tick: (ms: number) => (clock += ms), screen, tui, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
 }
 
 describe("thread view", () => {
@@ -563,6 +564,39 @@ describe("thread view", () => {
 		expect(s.sessionsOpened.at(-1)).toEqual({ harness: "claude-code", title: undefined });
 		s.release();
 		await s.settle();
+	});
+
+	test("a session just opened or closed stays so until the details show it, or for half a minute", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("n", keys.enter);
+		s.release();
+		await s.settle();
+		// Details read before the node saw the new session still list only the old ones.
+		s.details(withSessions);
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		s.press("G", "x", "j", keys.enter);
+		expect(s.sessionsClosed).toEqual(["%7"]);
+		s.release();
+		await s.settle();
+		// Closing the session just opened forgets it, whatever the details say next.
+		s.details(withSessions);
+		expect(s.text()).not.toContain("● opened");
+		s.press("g", "g", "x", "j", keys.enter);
+		s.release();
+		await s.settle();
+		s.details(withSessions);
+		expect(s.text()).not.toMatch(/login fix/);
+		expect(s.text()).toContain("4 Sessions 2");
+		// Details that never stop listing it win once the half minute is up.
+		s.tick(30_000);
+		s.details(withSessions);
+		expect(s.text()).toMatch(/login fix/);
+		s.press("n", keys.enter);
+		s.release();
+		await s.settle();
+		s.tick(30_000);
+		s.details(withSessions);
+		expect(s.text()).not.toContain("● opened");
 	});
 
 	test("a session that does not open says why, in the CLI's words", async () => {

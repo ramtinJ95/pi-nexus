@@ -51,6 +51,7 @@ import {
 	type PortChange,
 	noSessionChanges,
 	sessionName,
+	settleSessions,
 	shownSessions,
 } from "./model.ts";
 import { SessionForm } from "./session-form.ts";
@@ -417,6 +418,7 @@ export class ThreadScreen implements Component, Focusable {
 	setDetail(detail: ThreadDetail, askedAt: number): void {
 		this.detail = detail;
 		this.askedAt = askedAt;
+		settleSessions(this.sessionChanges, detail.sessions, this.now());
 		this.updateStatus();
 		this.tui.requestRender();
 	}
@@ -664,7 +666,7 @@ export class ThreadScreen implements Component, Focusable {
 
 	/** The sessions as shown: the details with what the person confirmed since they were read. */
 	private sessions() {
-		return shownSessions(this.detail?.sessions ?? [], this.sessionChanges, this.askedAt);
+		return shownSessions(this.detail?.sessions ?? [], this.sessionChanges);
 	}
 
 	private openForm(): void {
@@ -693,7 +695,7 @@ export class ThreadScreen implements Component, Focusable {
 		this.say(`Opening ${sessionName(harness, title)}. Its agent can take a minute to start.`);
 		try {
 			const session = await this.options.actions.openSession(harness, title);
-			changes.opened.push({ session, at: this.mark() });
+			changes.opened.push({ session, at: this.now() });
 			this.options.actions.refresh();
 			this.say(`Opened ${sessionName(session.harness, session.title)} in pane ${session.herdrPane}. Enter in Sessions, or /attach, attaches this terminal: pick the session's workspace in Herdr.`);
 		} catch (err) {
@@ -724,7 +726,8 @@ export class ThreadScreen implements Component, Focusable {
 		this.say(`Closing pane ${pane}...`);
 		try {
 			await this.options.actions.closeSession(pane);
-			changes.closed.set(pane, this.mark());
+			changes.closed.set(pane, this.now());
+			changes.opened = changes.opened.filter((o) => o.session.herdrPane !== pane);
 			this.options.actions.refresh();
 			this.say(`Closed pane ${pane}.`);
 		} catch (err) {

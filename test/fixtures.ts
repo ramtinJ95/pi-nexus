@@ -62,6 +62,8 @@ export interface Scenario {
 	watchExitDelayMs?: number;
 	/** How long a command takes to answer, by command. */
 	delayMs?: Record<string, number>;
+	/** The signal that stops `attach`, as Ctrl+C stops the CLI. */
+	attachSignal?: string;
 }
 
 const fakeSource = path.join(import.meta.dir, "fake-nexus.mjs");

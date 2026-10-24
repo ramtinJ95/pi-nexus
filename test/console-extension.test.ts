@@ -251,6 +251,17 @@ describe("console", () => {
 		n.shown[0]!.done({ kind: "close" });
 	});
 
+	test("while attached, Ctrl+C reaches the CLI and not pi, which ignores SIGINT until it takes the terminal back", async () => {
+		const n = load({ ...scenario, delayMs: { attach: 300 } });
+		const before = process.listenerCount("SIGINT");
+		const attaching = n.run(`session attach ${idA}`);
+		await n.until(() => n.calls().some((c) => c[0] === "attach"), "the attach");
+		expect(process.listenerCount("SIGINT")).toBe(before + 1);
+		await attaching;
+		expect(process.listenerCount("SIGINT")).toBe(before);
+		expect(n.shown[0]!.tui.events.at(-2)).toBe("start");
+	});
+
 	test("/nexus session attach gives the terminal to nexus attach and takes it back, or gives a pi without one the command", async () => {
 		const n = load(scenario);
 		await n.run(`session attach ${idA}`);
@@ -261,6 +272,9 @@ describe("console", () => {
 		await old.run(`session attach ${idA}`);
 		expect(old.shown[0]!.tui.events.at(-2)).toBe("start");
 		expect(old.notified).toContainEqual(["nexus: nexus has no attach command: attaching needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+		const stopped = load({ ...scenario, attachSignal: "SIGINT" });
+		await stopped.run(`session attach ${idA}`);
+		expect(stopped.notified).toContainEqual(["nexus: nexus attach stopped on SIGINT", "error"]);
 		const rpc = load(scenario, { custom: false });
 		await rpc.run(`session attach ${idA}`);
 		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  nexus attach ${idA}\n\n${sshHint}` }]);

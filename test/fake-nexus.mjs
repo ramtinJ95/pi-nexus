@@ -26,7 +26,9 @@ if (process.env.FAKE_NEXUS_PIDS) {
 }
 
 if (command === "attach") {
-	// The terminal is the attach's, and it prints nothing of its own.
+	// The terminal is the attach's, and it prints nothing of its own. `attachSignal` stands in for Ctrl+C.
+	if (scenario.delayMs?.attach) await new Promise((resolve) => setTimeout(resolve, scenario.delayMs.attach));
+	if (scenario.attachSignal) process.kill(process.pid, scenario.attachSignal);
 } else if (command === "watch") {
 	// watchExitDelayMs stands in for a CLI that takes a while to exit after it is told to stop.
 	process.on("SIGTERM", () =>

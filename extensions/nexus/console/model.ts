@@ -44,27 +44,38 @@ export const sessionName = (harness: string, title: string | null | undefined) =
 	`${harnessLabel[harness] ?? harness}${title ? ` "${title}"` : ""}`;
 
 /**
+ * How long an open or close confirmed in the thread view outweighs details that do not show it. The node reads its
+ * sessions again once the CLI has answered, so the next details can still show them as they were.
+ */
+export const sessionSettleMs = 30_000;
+
+/**
  * What the person did to the thread's sessions from the thread view: the opens and closes under way, and those
- * confirmed, each with the view's mark when it was.
+ * confirmed that the details have not shown yet, each with when it was confirmed.
  */
 export interface SessionChanges {
 	opening: { harness: string; title: string | undefined }[];
 	opened: { session: OpenedSession; at: number }[];
 	closing: Set<string>;
-	/** The mark of each pane's confirmed close. */
 	closed: Map<string, number>;
 }
 export const noSessionChanges = (): SessionChanges => ({ opening: [], opened: [], closing: new Set(), closed: new Map() });
 
+/** Forgets the confirmations that `sessions`, just read, show, or that have waited `sessionSettleMs` for it. */
+export function settleSessions(changes: SessionChanges, sessions: readonly Session[], now: number): void {
+	const listed = (pane: string) => sessions.some((s) => s.herdrPane === pane);
+	changes.opened = changes.opened.filter(({ session, at }) => !listed(session.herdrPane) && now - at < sessionSettleMs);
+	for (const [pane, at] of changes.closed) if (!listed(pane) || now - at >= sessionSettleMs) changes.closed.delete(pane);
+}
+
 /**
- * The sessions as the details list them, with what the person confirmed since: a pane just closed is gone, and a
- * session just opened is there, `opened` until the node reports it. A confirmation counts until details asked for
- * after it show the sessions as they are, as shownPorts does.
+ * The sessions as the details list them, with the confirmations they do not show yet: a pane just closed is gone,
+ * and a session just opened is there, `opened` until the node reports it.
  */
-export function shownSessions(sessions: readonly Session[], changes: SessionChanges, askedAt: number): Session[] {
-	const listed = sessions.filter((s) => (changes.closed.get(s.herdrPane) ?? 0) <= askedAt);
+export function shownSessions(sessions: readonly Session[], changes: SessionChanges): Session[] {
+	const listed = sessions.filter((s) => !changes.closed.has(s.herdrPane));
 	const opened = changes.opened
-		.filter(({ session, at }) => at > askedAt && !listed.some((s) => s.herdrPane === session.herdrPane))
+		.filter(({ session }) => !changes.closed.has(session.herdrPane) && !sessions.some((s) => s.herdrPane === session.herdrPane))
 		.map(({ session }): Session => ({ ...session, status: "opened", harnessSessionId: null }));
 	return [...listed, ...opened];
 }

@@ -119,7 +119,12 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 					stderr = (stderr + chunk.toString()).slice(-attachStderrKept);
 				});
 				child.on("error", (err) => reject(spawnFailure(bin, err)));
-				child.on("close", (code) => (code === 0 ? resolve() : reject(failure(code, stderr))));
+				child.on("close", (code, signal) => {
+					if (code === 0) resolve();
+					// Ctrl+C before ssh takes the terminal stops the CLI by signal, with no line of its own.
+					else if (signal !== null) reject(new NexusError("failed", `nexus attach stopped on ${signal}`));
+					else reject(failure(code, stderr));
+				});
 			});
 		},
 	};

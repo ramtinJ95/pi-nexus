@@ -104,14 +104,19 @@ export function userDisplay(cwd: string): Display {
 
 /**
  * Gives the terminal to `nexus attach` until the person detaches, as pi gives it to an external editor: the TUI
- * stops, which hands back the keyboard and the screen, and starts again after, drawing everything afresh.
+ * stops, which hands back the keyboard and the screen, and starts again after, drawing everything afresh. Ctrl+C in
+ * the meantime, such as while the CLI waits for a paused pylon, reaches the CLI, which stops, and not pi, which
+ * ignores it as it does while suspended.
  */
 async function attached(nexus: Nexus, tui: TUI, thread: string): Promise<void> {
+	const ignore = () => {};
+	process.on("SIGINT", ignore);
 	tui.stop();
 	try {
 		tui.terminal.write(`Attaching to the sessions of ${thread} with ${attachCommand(thread)}. Detach from Herdr to come back to pi.\n`);
 		await attachThread(nexus, thread);
 	} finally {
+		process.off("SIGINT", ignore);
 		tui.start();
 		tui.requestRender(true);
 	}
