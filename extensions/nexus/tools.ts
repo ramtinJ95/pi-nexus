@@ -28,11 +28,12 @@ const needsHuman = (state: ThreadState | undefined) =>
 			? "The pylon failed. A human must retry it with /nexus retry-pylon."
 			: undefined;
 
-/** A listening port as the model reads it: its service and its preview's URL, when it has them. */
+/** A listening port as the model reads it: its service and its preview's URL, when it has them, and why that failed. */
 const portFacts = (port: ListeningPort) => ({
 	port: port.port,
 	...(port.service ? { service: port.service } : {}),
 	...(port.preview ? { url: port.preview.url, ready: port.preview.ready } : {}),
+	...(port.preview?.failed ? { failed: port.preview.failed } : {}),
 });
 
 const stateFields = (state: ThreadState | undefined) =>

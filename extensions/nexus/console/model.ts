@@ -515,12 +515,14 @@ export type PreviewLook = { linked: boolean; label: string | null; tone: Tone; h
 
 /**
  * A paused pylon's preview keeps its link, because a visit wakes the pylon. An archived thread's pylon stays paused
- * whatever the visit, so its preview would only show the waking page.
+ * whatever the visit, so its preview would only show the waking page. A failed service's preview has no link, because
+ * the gateway can only answer 502 for it, and its hint is why the service failed.
  */
-export function previewLook(detail: ThreadDetail, ready: boolean): PreviewLook {
+export function previewLook(detail: ThreadDetail, preview: Pick<Preview, "ready" | "failed">): PreviewLook {
 	if (detail.thread.status === "archived") return { linked: false, label: "paused", tone: "idle", hint: "Unarchive the thread to open it." };
 	if (detail.pylon.actualState === "paused") return { linked: true, label: "paused", tone: "idle", hint: "Opening it wakes the pylon." };
-	return ready ? { linked: true, label: null, tone: "ok", hint: null } : { linked: false, label: "starting", tone: "busy", hint: null };
+	if (preview.failed) return { linked: false, label: "failed", tone: "bad", hint: preview.failed };
+	return preview.ready ? { linked: true, label: null, tone: "ok", hint: null } : { linked: false, label: "starting", tone: "busy", hint: null };
 }
 
 export interface StartForm {

@@ -70,10 +70,13 @@ describe("model tools", () => {
 	});
 
 	test("nexus_read returns the state, its ports and the conversation from one watch poll", async () => {
+		const why = "the service api failed. `nexus service logs api` in the pylon shows why";
+		// A control plane older than a preview's `failed` leaves it out, which reads as null.
 		const ports = [
-			{ port: 5173, service: "web", preview: { service: "web", ready: true, url: "https://firebat.example.ts.net:8443/" } },
+			{ port: 5173, service: "web", preview: { service: "web", ready: true, failed: null, url: "https://firebat.example.ts.net:8443/" } },
 			{ port: 8080, service: null, preview: { service: "port-8080", ready: false, url: "https://firebat.example.ts.net:8444/" } },
 			{ port: 9000, service: null, preview: null },
+			{ port: 9100, service: "api", preview: { service: "api", ready: false, failed: why, url: "https://firebat.example.ts.net:8445/" } },
 		];
 		const { call, calls } = setup({
 			watch: [{ event: reset(idA, [head, user(1, "fix the bug"), assistant(2, "Fixed it.")]) }, { event: state(idA, { ...idle, ports }) }],
@@ -89,6 +92,7 @@ describe("model tools", () => {
 				{ port: 5173, service: "web", url: "https://firebat.example.ts.net:8443/", ready: true },
 				{ port: 8080, url: "https://firebat.example.ts.net:8444/", ready: false },
 				{ port: 9000 },
+				{ port: 9100, service: "api", url: "https://firebat.example.ts.net:8445/", ready: false, failed: why },
 			],
 			conversation: "> fix the bug\n\nFixed it.",
 		});

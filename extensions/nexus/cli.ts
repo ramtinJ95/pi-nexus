@@ -169,11 +169,14 @@ export const unpreviewPort = (nexus: Nexus, thread: string, port: number, signal
 	});
 export const listProjects = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(Project), await nexus.run(["projects"], signal), "nexus projects");
 
-/** Adds a project, which needs CLI 0.4.0. `=` keeps a node or branch that starts with a dash from reading as a flag. */
+/**
+ * Adds a project, which needs CLI 0.4.0. `=` keeps a node or branch that starts with a dash from reading as a flag, and
+ * `--` does the same for the ID and the repo URL.
+ */
 export async function addProject(nexus: Nexus, add: { id: string; repoUrl: string; node: string; branch?: string }, signal?: AbortSignal): Promise<Project> {
 	const flags = [`--node=${add.node}`, ...(add.branch ? [`--branch=${add.branch}`] : [])];
 	try {
-		return parse(Project, await nexus.run(["project add", add.id, add.repoUrl, ...flags], signal), "nexus project add");
+		return parse(Project, await nexus.run(["project add", ...flags, "--", add.id, add.repoUrl], signal), "nexus project add");
 	} catch (err) {
 		if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command project") {
 			throw new NexusError("invalid", "nexus has no project add command: adding a project needs Nexus CLI 0.4.0 or later (nexus --version)");
