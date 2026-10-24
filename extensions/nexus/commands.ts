@@ -22,10 +22,11 @@ export type NexusCommand =
 	| { name: "open" | "show" | "follow"; thread: string }
 	| { name: "unfollow"; thread?: string }
 	| { name: "unpublish"; thread: string; port: number }
+	| { name: "strip"; on: boolean }
 	| { name: Action; thread: string }
 	| { name: "help" };
 
-export const usage = `/nexus                              the thread picker, with the overview
+export const usage = `/nexus                              the working thread over the picker, or the picker
 /nexus open <thread>                 the thread as a pi session, to read and message it
 /nexus new [project]                 the start form
 /nexus list [project]                threads, without deleted ones
@@ -37,9 +38,10 @@ export const usage = `/nexus                              the thread picker, wit
 /nexus unpublish <thread> <port>     close a port's preview
 /nexus archive|unarchive|retry|retry-pylon|abort <thread>
 /nexus delete <thread>               asks first
+/nexus strip on|off                  the threads that need you, have news or work, above the editor
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
-const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", ...Object.keys(actions), "help"];
+const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", "strip", ...Object.keys(actions), "help"];
 
 interface Token {
 	value: string;
@@ -107,6 +109,10 @@ export function parseCommand(input: string): NexusCommand {
 			if (!Number.isInteger(port) || port < 1 || port > 65535) throw invalid(`unpublish needs a port from 1 to 65535, got ${args[1]}`);
 			return { name, thread, port };
 		}
+		case "strip":
+			only(1);
+			if (args[0] !== "on" && args[0] !== "off") throw invalid("strip needs on or off");
+			return { name, on: args[0] === "on" };
 		case "help":
 			return { name };
 		case "open":

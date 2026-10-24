@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { createNexus } from "../extensions/nexus/cli.ts";
-import { assistant, entry, fakeNexus, idA, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
+import { createNexus, type Nexus } from "../extensions/nexus/cli.ts";
+import { memoryStores } from "./console-fixture.ts";
+import { assistant, entry, fakeNexus, idA, idB, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
@@ -37,7 +38,7 @@ function load(scenario: Scenario, { answer }: { answer?: string } = { answer: "D
 			setWidget: (key: string, lines: string[] | undefined) => widgets.set(key, lines),
 		},
 	} as unknown as ExtensionCommandContext;
-	nexusExtension(pi, createNexus(fake.bin));
+	nexusExtension(pi, createNexus(fake.bin), undefined, memoryStores());
 	cleanups.push(() => handlers.get("session_shutdown")?.(), fake.cleanup);
 	const shutdown = () => handlers.get("session_shutdown")!();
 	const tool = (name: string, params: object) => tools.find((t) => t.name === name)!.execute("call-1", params, undefined, undefined, ctx);
@@ -62,6 +63,30 @@ describe("/nexus", () => {
 		const old = load({ responses: { threads }, fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
 		await old.run(`unpublish ${idA} 8080`);
 		expect(old.notified).toContainEqual(["nexus: nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)", "error"]);
+	});
+
+	test("a port being published or unpublished refuses a second change from any entry point, without queueing it", async () => {
+		const preview = { pylon: "py-1", service: "port-8080", httpsPort: 8444, ready: true, url: "https://firebat.example.ts.net:8444/" };
+		const n = load({ responses: { threads, preview, unpreview: null }, delayMs: { preview: 600 } });
+		const busy = `Port 8080 on ${idA} is already being published or unpublished. Try again when it finishes.`;
+		const publishing = n.tool("nexus_preview", { thread: idA, port: 8080 });
+		await until(() => n.calls().some((c) => c[0] === "preview"));
+		// The model's publish holds the port against the /nexus command and the model's own unpublish.
+		await n.run(`unpublish ${idA} 8080`);
+		expect(n.notified).toContainEqual([`nexus: ${busy}`, "error"]);
+		await expect(n.tool("nexus_unpublish", { thread: idA, port: 8080 })).rejects.toThrow(`nexus (conflict): ${busy}`);
+		expect(n.calls().filter((c) => c[0] === "unpreview")).toEqual([]);
+		// Another port, or the same port on another thread, is free.
+		await n.run(`unpublish ${idA} 9000`);
+		await n.run(`unpublish ${idB} 8080`);
+		expect(n.calls().filter((c) => c[0] === "unpreview")).toEqual([
+			["unpreview", "--json", idA, "9000"],
+			["unpreview", "--json", idB, "8080"],
+		]);
+		await publishing;
+		// Once the publish ends, the refused unpublish can run; nothing ran it in the meantime.
+		await n.run(`unpublish ${idA} 8080`);
+		expect(n.calls().filter((c) => c[0] === "unpreview" && c[2] === idA && c[3] === "8080")).toHaveLength(1);
 	});
 
 	test("list shows the threads and sets the working count", async () => {
@@ -193,5 +218,55 @@ describe("/nexus", () => {
 		await n.run("send");
 		expect(n.notified[0]![0]).toStartWith("nexus: send needs a thread");
 		expect(n.calls().some((c) => c[0] === "send")).toBe(false);
+	});
+});
+
+describe("the status poll", () => {
+	/** A Nexus whose `threads` answers only when the test says, recording each run's signal. */
+	function held() {
+		const runs: { args: readonly string[]; signal: AbortSignal | undefined; answer: () => void }[] = [];
+		const nexus: Nexus = {
+			run: (args, signal) =>
+				new Promise((resolve, reject) => {
+					runs.push({ args, signal, answer: () => resolve(args[0] === "threads" ? threads : null) });
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+				}),
+			watch: async () => {},
+		};
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+		const pi = {
+			registerEntryRenderer() {},
+			registerTool() {},
+			registerCommand: (_name: string, options: { handler: typeof command }) => (command = options.handler),
+			on: (event: string, handler: (event: unknown, ctx: unknown) => void) => handlers.set(event, handler),
+			appendEntry() {},
+		} as unknown as ExtensionAPI;
+		const ctx = { hasUI: true, ui: { notify() {}, setStatus() {}, setWidget() {} } } as unknown as ExtensionCommandContext;
+		nexusExtension(pi, nexus, undefined, memoryStores());
+		cleanups.push(() => handlers.get("session_shutdown")?.(undefined, undefined));
+		return {
+			runs,
+			start: () => handlers.get("session_start")!({ type: "session_start" }, ctx),
+			shutdown: () => handlers.get("session_shutdown")!(undefined, undefined),
+			run: (args: string) => command!(args, ctx),
+		};
+	}
+	const threadsRuns = (runs: { args: readonly string[] }[]) => runs.filter((r) => r.args[0] === "threads");
+
+	test("/nexus strip off aborts the poll in flight and starts none", async () => {
+		const n = held();
+		n.start();
+		expect(threadsRuns(n.runs)).toHaveLength(1);
+		await n.run("strip off");
+		expect(threadsRuns(n.runs)).toHaveLength(1);
+		expect(n.runs[0]!.signal?.aborted).toBe(true);
+	});
+
+	test("the session's end aborts the poll in flight", () => {
+		const n = held();
+		n.start();
+		n.shutdown();
+		expect(n.runs[0]!.signal?.aborted).toBe(true);
 	});
 });

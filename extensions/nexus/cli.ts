@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
 import { NodeSummary, parse, Preview, Project, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
-import { emptyView, isThreadId, NexusError, isSettled, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
+import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** Runs `nexus <command> --json <args>` and returns what it printed. */
@@ -124,27 +124,49 @@ export const sendText = (nexus: Nexus, thread: string, text: string, steer: bool
 
 export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
 	parse(ThreadDetail, await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+/** The `thread:port` pairs a publish or unpublish runs on, for each Nexus the session drives. */
+const portsChanging = new WeakMap<Nexus, Set<string>>();
+
+/**
+ * Runs `change` on the thread's port, refusing it while another publish or unpublish of the same port runs, from the
+ * console, a /nexus command or a model tool alike. Two CLI processes on one port could finish in either order, so an
+ * older publish could leave a port published after a newer unpublish closed it. A refusal does not queue.
+ */
+async function changingPort<T>(nexus: Nexus, thread: string, port: number, change: () => Promise<T>): Promise<T> {
+	const changing = portsChanging.get(nexus) ?? new Set<string>();
+	portsChanging.set(nexus, changing);
+	const key = `${thread}:${port}`;
+	if (changing.has(key)) throw new NexusError("conflict", portBusy(thread, port));
+	changing.add(key);
+	try {
+		return await change();
+	} finally {
+		changing.delete(key);
+	}
+}
+
 /**
  * Publishes `port` of the thread's pylon as a preview and waits, up to the CLI's two minutes, until the node serves
  * it. An abort ends the wait, but the port may be published by then.
  */
-export const previewPort = async (nexus: Nexus, thread: string, port: number, signal?: AbortSignal) =>
-	parse(Preview, await nexus.run(["preview", thread, String(port), "--wait"], signal), "nexus preview");
+export const previewPort = (nexus: Nexus, thread: string, port: number, signal?: AbortSignal) =>
+	changingPort(nexus, thread, port, async () => parse(Preview, await nexus.run(["preview", thread, String(port), "--wait"], signal), "nexus preview"));
 /**
  * Unpublishes the preview of `port`, which a port with none already is. A paused pylon is woken first, so it can take
  * up to the CLI's two minutes. An abort ends the wait, but the preview may be gone by then. The CLI refuses a
  * declared or ad hoc service's preview.
  */
-export async function unpreviewPort(nexus: Nexus, thread: string, port: number, signal?: AbortSignal): Promise<void> {
-	try {
-		parse(Unpreviewed, await nexus.run(["unpreview", thread, String(port)], signal), "nexus unpreview");
-	} catch (err) {
-		if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command unpreview") {
-			throw new NexusError("invalid", "nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
+export const unpreviewPort = (nexus: Nexus, thread: string, port: number, signal?: AbortSignal): Promise<void> =>
+	changingPort(nexus, thread, port, async () => {
+		try {
+			parse(Unpreviewed, await nexus.run(["unpreview", thread, String(port)], signal), "nexus unpreview");
+		} catch (err) {
+			if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command unpreview") {
+				throw new NexusError("invalid", "nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
+			}
+			throw err;
 		}
-		throw err;
-	}
-}
+	});
 export const listProjects = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(Project), await nexus.run(["projects"], signal), "nexus projects");
 export const listNodes = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(NodeSummary), await nexus.run(["nodes"], signal), "nexus nodes");
 

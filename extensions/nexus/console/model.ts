@@ -4,8 +4,9 @@
  * folds, the same run bar and the same reasons a thread takes no messages.
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, DesiredPhase, LiveRun, Preview, Project, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
-import { contentText } from "../thread.ts";
+import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, Preview, Project, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
+import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
+import type { Seen } from "../store.ts";
 
 /** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
 export type Tone = "ok" | "work" | "busy" | "idle" | "bad" | "muted";
@@ -89,6 +90,65 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 		const own = newest.filter((t) => t.project === project);
 		return { project, open: own.filter((t) => !isClosed(t)), closed: own.filter(isClosed) };
 	});
+}
+
+/**
+ * The threads seen parked, with when, from the thread the console shows or a follow, since the threads list does not
+ * say. The Claude Code Nexus mod knows parked tasks the same way, only for the thread it watches.
+ */
+export type Parked = Map<string, number>;
+
+/** Records what `state` says of the thread's parked tasks, seen at `now`. */
+export function noteParked(parked: Parked, thread: string, state: ThreadState | undefined, now: number): void {
+	if (state?.run === "parked") parked.set(thread, now);
+	else if (state !== undefined) parked.delete(thread);
+}
+
+/** What the person has looked at, and the threads seen parked: what the markers read. */
+export interface Marks {
+	seen: Seen;
+	parked: ReadonlyMap<string, number>;
+}
+
+/**
+ * What a thread wants of the person, most urgent first: its pylon failed or its tasks are parked, and only they can
+ * retry them, or its agent did something since they last looked. A working agent is not done yet, and an archived
+ * or deleted thread wants nothing. A thread seen parked stays so until its agent does something after that.
+ */
+export type Attention = "needs-you" | "new" | null;
+
+export function attention(t: ThreadRow, { seen, parked }: Marks): Attention {
+	if (isClosed(t)) return null;
+	if (t.pylon.failed !== null) return "needs-you";
+	if (t.agentTurnRunning) return null;
+	const parkedAt = parked.get(t.id);
+	if (parkedAt !== undefined && t.lastAgentActivityAt <= parkedAt) return "needs-you";
+	return t.lastAgentActivityAt > (seen.threads[t.id] ?? seen.since) ? "new" : null;
+}
+
+/** The status line's summary, such as `nexus 2 working · 1 needs you · 3 new`. The counts other than working show when not zero. */
+export function summary(threads: readonly ThreadRow[], marks: Marks): string {
+	const count = (a: Attention) => threads.filter((t) => attention(t, marks) === a).length;
+	const needs = count("needs-you");
+	const fresh = count("new");
+	return [`nexus ${workingCount(threads)} working`, ...(needs > 0 ? [`${needs} needs you`] : []), ...(fresh > 0 ? [`${fresh} new`] : [])].join(" · ");
+}
+
+/** A thread in the strip above pi's editor: one that needs you, has news, or works, in that order. */
+export interface Chip {
+	thread: ThreadRow;
+	kind: "needs-you" | "new" | "working";
+}
+
+const chipOrder: Readonly<Record<Chip["kind"], number>> = { "needs-you": 0, new: 1, working: 2 };
+
+export function chips(threads: readonly ThreadRow[], marks: Marks): Chip[] {
+	return threads
+		.flatMap((thread): Chip[] => {
+			const kind = attention(thread, marks) ?? (thread.agentTurnRunning && !isClosed(thread) ? "working" : null);
+			return kind === null ? [] : [{ thread, kind }];
+		})
+		.sort((a, b) => chipOrder[a.kind] - chipOrder[b.kind] || lastActivityAt(b.thread) - lastActivityAt(a.thread));
 }
 
 export type PickerRow =
@@ -398,6 +458,47 @@ export function shownPorts(
 		return known === null ? p : { ...p, preview: known.preview };
 	});
 	return { previews: [...listed, ...published], ports };
+}
+
+/**
+ * A row of the Ports view: a preview, with the port it serves when the ports say, or a port that listens with no
+ * preview. Each port shows once.
+ */
+export type PortRow = { kind: "preview"; preview: Preview; port: number | undefined } | { kind: "port"; port: ListeningPort };
+
+export function portRows({ previews, ports }: Pick<ThreadDetail, "previews" | "ports">): PortRow[] {
+	const portOf = new Map((ports ?? []).flatMap((p) => (p.preview ? [[p.preview.service, p.port] as const] : [])));
+	return [
+		...previews.map((preview): PortRow => ({ kind: "preview", preview, port: linkedPort(preview.service) ?? portOf.get(preview.service) })),
+		...(ports ?? []).filter((p) => p.preview === null).map((port): PortRow => ({ kind: "port", port })),
+	];
+}
+
+/**
+ * What publishing (Enter) or unpublishing (x) does on a port row, or why it does nothing: only a port with no
+ * preview publishes, and only a port's own preview unpublishes, since a service keeps its preview. A port already
+ * changing is refused, as every other way to change it is.
+ */
+export function portAction(
+	thread: string,
+	row: PortRow,
+	change: PortChange,
+	canRun: boolean,
+	want: "open" | "unpublish",
+): { kind: "open" | "unpublish"; port: number } | { kind: "none"; why: string } {
+	const port = row.kind === "port" ? row.port.port : row.port;
+	// A preview with no port of its own has no change to wait for.
+	if (port !== undefined && change.pending !== null) return { kind: "none", why: portBusy(thread, port) };
+	if (row.kind === "port") {
+		if (want === "unpublish") return { kind: "none", why: `Port ${row.port.port} has no preview to unpublish.` };
+		if (row.port.service !== null) return { kind: "none", why: `Port ${row.port.port} belongs to the service ${row.port.service}, which has no preview to publish.` };
+		return { kind: "open", port: row.port.port };
+	}
+	const own = linkedPort(row.preview.service);
+	if (want === "open") return { kind: "none", why: `${row.preview.service} is published already.${own === undefined ? "" : " x unpublishes it."}` };
+	if (own === undefined) return { kind: "none", why: `The service ${row.preview.service} keeps its preview. Only a port's own preview can be unpublished.` };
+	if (!canRun) return { kind: "none", why: "The thread is not running, so its preview cannot be unpublished now." };
+	return { kind: "unpublish", port: own };
 }
 
 /** The preview reaches only the pylon's 127.0.0.1, so a server bound only to ::1 is neither listed nor reachable. */

@@ -8,7 +8,9 @@ import { reduce, type ThreadView } from "../extensions/nexus/thread.ts";
 import { asked, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { idA, idle } from "./fixtures.ts";
 
-const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", pageUp: "\x1b[5~", pageDown: "\x1b[6~", altI: "\x1bi", ctrlO: "\x0f" };
+/** The note a second change of port 8080 gets while one runs, as every entry point says it. */
+const busy = `Port 8080 on ${idA} is already being published or unpublished. Try again when it finishes.`;
+const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", up: "\x1b[A", pageUp: "\x1b[5~", pageDown: "\x1b[6~", ctrlO: "\x0f", ctrlD: "\x04", ctrlU: "\x15" };
 const screens: ThreadScreen[] = [];
 afterEach(() => screens.splice(0).forEach((s) => s.dispose()));
 
@@ -33,6 +35,7 @@ function open(
 	const ends: ScreenEnd[] = [];
 	let failures = sendFails;
 	let refreshes = 0;
+	let rewatches = 0;
 	const tui = fakeTui(rows, 100);
 	const screen = new ThreadScreen({
 		tui,
@@ -66,6 +69,9 @@ function open(
 			refresh() {
 				refreshes++;
 			},
+			rewatch() {
+				rewatches++;
+			},
 			async copy(text) {
 				if (copyFails) throw new Error("no clipboard");
 				copied.push(text);
@@ -77,15 +83,24 @@ function open(
 	screen.setView(view);
 	if (shown !== null) screen.setDetail(shown, screen.mark());
 	const text = () => plain(screen.render(100));
+	/** The mode the hint line names. */
+	const mode = () => (text().trimEnd().split("\n").at(-1)!.startsWith("INSERT") ? "insert" : "normal");
+	/** Types `input` into the composer, from insert mode, and sends it. */
 	const type = async (input: string) => {
+		if (mode() === "normal") screen.handleInput("i");
 		for (const ch of input) screen.handleInput(ch);
 		screen.handleInput(keys.enter);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	};
+	/** Presses `input` in normal mode, leaving insert mode first. */
+	const normal = (...input: string[]) => {
+		if (mode() === "insert") screen.handleInput(keys.escape);
+		for (const k of input) screen.handleInput(k);
+	};
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 	/** Details as the console reads them, asked for now or at the earlier mark `askedAt`. */
 	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
-	return { screen, tui, sent, acted, previewed, unpublished, copied, ends, text, type, settle, details, refreshes: () => refreshes, release: () => release(), press: (key: string) => screen.handleInput(key) };
+	return { screen, tui, sent, acted, previewed, unpublished, copied, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
 }
 
 describe("thread view", () => {
@@ -131,22 +146,67 @@ describe("thread view", () => {
 		expect(out).toMatch(/\+\s+await sleep\(backoff\(attempt\)\);/);
 	});
 
-	test("a line of key hints sits under the footer, in pi's hint style, naming only the keys that work there", () => {
+	test("the hint line under the footer names the mode and the keys that work there, in pi's hint style", () => {
 		const s = open();
-		const hintsUnder = (pattern: RegExp) => {
-			const lines = s.text().split("\n");
-			const footer = lines.findIndex((l) => pattern.test(l));
-			return { line: lines[footer + 1]!, raw: s.screen.render(100)[footer + 1]!, all: lines };
-		};
-		const transcript = hintsUnder(/^pylon running on firebat/);
-		expect(transcript.line).toMatch(/^esc close {2}pgup\/pgdn scroll {2}ctrl\+o expand tools {2}(alt|option)\+i info {2}\/ commands$/);
+		const hints = () => s.text().trimEnd().split("\n").at(-1)!;
+		expect(s.text()).toMatch(/demo-model\nNORMAL {2}i write {2}j\/k scroll {2}d\/u half page {2}h\/l views {2}m actions {2}s keys {2}q close/);
 		// pi's hint colours: the key dim, what it does muted.
 		const t = piTheme();
-		expect(transcript.raw.startsWith(t.fg("dim", "esc") + t.fg("muted", " close"))).toBe(true);
-		s.press(keys.altI);
-		const inspector = hintsUnder(/^pylon running on firebat/);
-		expect(inspector.line).toBe("esc transcript  pgup/pgdn scroll  / commands");
-		expect(inspector.all.filter((l) => l.includes("esc transcript"))).toHaveLength(1);
+		expect(s.screen.render(100).join("\n")).toContain(`${t.fg("dim", "i")}${t.fg("muted", " write")}`);
+		s.normal("3");
+		expect(hints()).toMatch(/^NORMAL {2}i write {2}j\/k select {2}enter publish {2}x unpublish {2}y copy {2}h\/l views/);
+		s.press("i");
+		expect(hints()).toBe("INSERT  esc normal mode  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools");
+		s.press(":");
+		expect(s.sent).toEqual([]);
+		expect(hints()).toBe("INSERT  esc normal mode  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools");
+	});
+
+	test("the view opens in normal mode, where letters move it; i or a writes, Esc stops, and only insert mode shows the cursor", async () => {
+		const s = open();
+		const cursor = () => s.screen.render(100).some((l) => l.includes("\x1b_pi:fc"));
+		expect(s.mode()).toBe("normal");
+		expect(cursor()).toBe(false);
+		s.press("l");
+		expect(s.text()).toContain("Pylon");
+		s.press("l", "l");
+		expect(s.text()).toContain("Previews 1");
+		s.press("h", "h");
+		expect(s.text()).toContain("I'll read the probe first.");
+		s.press("i");
+		expect(cursor()).toBe(true);
+		// An empty Enter leaves insert mode, as Esc does.
+		s.press(keys.enter);
+		expect(s.mode()).toBe("normal");
+		expect(s.sent).toEqual([]);
+		s.press("a");
+		expect(s.mode()).toBe("insert");
+		for (const ch of "hjkl") s.press(ch);
+		expect(s.text()).toMatch(/^hjkl/m);
+		expect(s.text()).toContain("I'll read the probe first.");
+		s.press(keys.escape);
+		expect(s.mode()).toBe("normal");
+		expect(cursor()).toBe(false);
+		s.press("2");
+		expect(s.text()).toContain("Pylon");
+		// The draft waits in the composer while the view moves.
+		expect(s.text()).toMatch(/^hjkl/m);
+		s.press("a");
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.sent.map((m) => m.text)).toEqual(["hjkl"]);
+		// Insert mode lasts past a send, so the next message needs no i.
+		expect(s.mode()).toBe("insert");
+	});
+
+	test("/ in normal mode starts a slash command in the composer", async () => {
+		const s = open();
+		s.press("/");
+		expect(s.mode()).toBe("insert");
+		for (const ch of "abort") s.press(ch);
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["abort"]);
 	});
 
 	test("a blank line sits above the editor, after the queued line or the transcript, as in pi", () => {
@@ -239,16 +299,118 @@ describe("thread view", () => {
 		expect(s.acted).toEqual(["delete"]);
 	});
 
-	test("Esc closes and never aborts, and closes the inspector first", async () => {
+	test("h on the conversation goes back, q closes, t opens the picker, and Esc returns to the conversation but never closes or aborts", () => {
 		const s = open();
-		s.press(keys.altI);
+		s.normal("2");
 		expect(s.text()).toContain("Pylon");
 		s.press(keys.escape);
-		expect(s.ends).toEqual([]);
 		expect(s.text()).not.toContain("Sessions 1");
 		s.press(keys.escape);
-		expect(s.ends).toEqual([{ kind: "close" }]);
+		expect(s.ends).toEqual([]);
+		s.press("h");
+		s.press("q");
+		s.press("t");
+		expect(s.ends).toEqual([{ kind: "back" }, { kind: "close" }, { kind: "threads" }]);
 		expect(s.acted).toEqual([]);
+	});
+
+	test("s or ? lists the keys over the view, and the next key only closes the list", () => {
+		const s = open();
+		s.press("s");
+		expect(s.text()).toContain("Keys in normal mode");
+		expect(s.text()).toMatch(/gg\/home +the top, or the first port/);
+		expect(s.text()).toMatch(/ctrl\+o +expand or fold tool output, as in pi/);
+		s.press("q");
+		expect(s.ends).toEqual([]);
+		expect(s.text()).not.toContain("Keys in normal mode");
+	});
+
+	test("m or : opens the actions that apply, j and k move, Enter runs one and Esc cancels", async () => {
+		const s = open();
+		s.press("m");
+		const out = s.text();
+		expect(out).toContain("Actions");
+		expect(out).toMatch(/→ Abort the run/);
+		for (const label of ["Start again", "Archive", "Copy the attach command", "Delete"]) expect(out).toContain(label);
+		for (const label of ["Retry the parked tasks", "Retry the pylon", "Unarchive"]) expect(out).not.toContain(label);
+		s.press(keys.escape);
+		expect(s.text()).not.toContain("Abort the run");
+		expect(s.acted).toEqual([]);
+		s.press(":");
+		s.press("j");
+		s.press("j");
+		s.press("k");
+		s.press("j");
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["archive"]);
+		expect(s.text()).toContain("Archived the thread.");
+		s.press(":");
+		for (let i = 0; i < 3; i++) s.press("j");
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.copied).toEqual(["herdr --session nexus"]);
+		const failed = open({ entries, state: { ...idle, run: "parked", parkedTasks: 1, pylon: "failed", failed: "boom", status: "archived" } });
+		failed.press(":");
+		expect(failed.text()).toMatch(/→ Retry the parked tasks.*\n.*Retry the pylon/);
+		expect(failed.text()).toContain("Unarchive");
+		expect(failed.text()).not.toMatch(/^ *(→ )?Archive /m);
+	});
+
+	test("when the watch ends the actions offer to watch again, which follows the thread again", () => {
+		const s = open();
+		s.screen.watchEnded("nexus: connection reset");
+		expect(s.text()).toContain("The watch ended: nexus: connection reset. m, then Watch again, follows the thread again.");
+		s.press("m");
+		expect(s.text()).toMatch(/→ Watch again/);
+		s.press(keys.enter);
+		expect(s.rewatches()).toBe(1);
+		expect(s.text()).toContain("Watching the thread again...");
+		s.press("m");
+		expect(s.text()).not.toContain("Watch again");
+	});
+
+	test("a deleted thread's ended watch keeps the delete's note and offers no watch again", async () => {
+		const s = open();
+		s.press("m", ..."jjjjjj", keys.enter, "j", keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["delete"]);
+		// The watch reports the thread deleted, then ends, as Nexus ends a deleted thread's watch.
+		s.screen.setView({ entries, state: { ...idle, status: "deleted" } });
+		s.screen.watchEnded(undefined);
+		expect(s.text()).toContain("Deleted the thread.");
+		expect(s.text()).not.toContain("The watch ended");
+		s.press("m");
+		expect(s.text()).not.toContain("Watch again");
+	});
+
+	test("y in Details copies the attach command", async () => {
+		const s = open();
+		s.press("y");
+		await s.settle();
+		expect(s.copied).toEqual([]);
+		s.press("l", "y");
+		await s.settle();
+		expect(s.copied).toEqual(["herdr --session nexus"]);
+	});
+
+	test("Delete in the actions asks with Keep first, as /delete does", async () => {
+		const s = open();
+		s.press(":");
+		s.press("G");
+		for (let i = 0; i < 6; i++) s.press("j");
+		s.press(keys.enter);
+		expect(s.text()).toContain(`Delete ${idA}? Its pylon is deleted for good.`);
+		s.press(keys.enter);
+		expect(s.acted).toEqual([]);
+		expect(s.text()).toContain("Kept the thread.");
+		s.press(":");
+		for (let i = 0; i < 6; i++) s.press("j");
+		s.press(keys.enter);
+		s.press("j");
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["delete"]);
 	});
 
 	test("/start-again hands back the project and title", async () => {
@@ -257,32 +419,86 @@ describe("thread view", () => {
 		expect(s.ends).toEqual([{ kind: "start-again", project: "nexus", title: "Fix the probe retry" }]);
 	});
 
-	test("the inspector shows the pylon, previews, ports, outputs, sessions and the attach command", () => {
+	test("Details shows the pylon, outputs, sessions and attach command, and Ports the previews and ports", () => {
 		const s = open();
 		s.screen.setNodes([{ name: "firebat", state: "offline" }]);
-		s.press(keys.altI);
+		s.normal("2");
+		const details = s.text();
+		expect(details).toMatch(/Desired +● running/);
+		expect(details).toMatch(/Node +firebat offline/);
+		expect(details).toMatch(/Last seen +1 min ago \(stale\)/);
+		// The preview output repeats the listed preview, so only the branch is left.
+		expect(details).toMatch(/Outputs 1\n +branch +nexus\/th-0123456789ab\n\n/);
+		expect(details).toMatch(/pi +● working  %3  session abc/);
+		expect(details).toContain("herdr --session nexus");
+		expect(details).not.toContain("Previews");
+		s.press("3");
 		const out = s.text();
-		expect(out).toMatch(/Desired +● running/);
-		expect(out).toMatch(/Node +firebat offline/);
-		expect(out).toMatch(/Last seen +1 min ago \(stale\)/);
+		expect(out).not.toContain("Desired");
 		// The preview names its port, since the service is not port-5173, and links the URL the contract gives.
-		expect(out).toContain("● web  port 5173\n     https://firebat.example.ts.net:8443/");
+		expect(out).toContain("→ ● web  port 5173\n     https://firebat.example.ts.net:8443/");
 		expect(s.screen.render(100).join("\n")).toContain("\x1b]8;;https://firebat.example.ts.net:8443/\x1b\\");
-		expect(out).toContain("Click a link to open it, or /copy <port or service> to copy it.");
+		expect(out).toContain("Click a link to open it, or copy it with y or /copy <port or service>.");
 		// Each port shows once: 5173 under Previews, and 8080, which has no preview, under Ports.
 		expect(out).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
 		expect(out.match(/5173/g)).toHaveLength(1);
-		// The preview output repeats the listed preview, so only the branch is left.
-		expect(out).toMatch(/Outputs 1\n +branch +nexus\/th-0123456789ab\n\n/);
-		expect(out).toMatch(/pi +● working  %3  session abc/);
-		expect(out).toContain("herdr --session nexus");
+		expect(out).toContain("1 Conversation   2 Details   3 Ports 2");
+	});
+
+	test("in Ports, j and k select a row, Enter publishes a port, x unpublishes its own preview, and y copies a link", async () => {
+		const s = open(undefined, { opened: new Map([[8080, own]]) });
+		s.normal("3");
+		s.press("y");
+		await s.settle();
+		expect(s.copied).toEqual([webPreview.url]);
+		s.press(keys.enter);
+		expect(s.text()).toContain("web is published already.");
+		s.press("x");
+		expect(s.text()).toContain("The service web keeps its preview");
+		expect(s.previewed).toEqual([]);
+		s.press("j");
+		expect(s.text()).toMatch(/→ ● 8080  no preview yet\. enter or \/open 8080 publishes one/);
+		s.press(keys.enter);
+		expect(s.previewed).toEqual([8080]);
+		expect(s.text()).toContain("● 8080  opening:");
+		s.press("o");
+		expect(s.previewed).toEqual([8080]);
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
+		s.release();
+		await s.settle();
+		// The published port is a preview row now, after web's.
+		s.press("G");
+		expect(s.text()).toMatch(/→ ● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +x or \/unpublish 8080 closes it\n/);
+		s.press(keys.enter);
+		expect(s.text()).toContain("port-8080 is published already. x unpublishes it.");
+		expect(s.unpublished).toEqual([]);
+		s.press("x");
+		expect(s.unpublished).toEqual([8080]);
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/Ports 1\n +→ ● 8080  no preview yet/);
+		s.press("g");
+		s.press("g");
+		s.press("k");
+		expect(s.text()).toMatch(/→ ● web/);
+	});
+
+	test("a selected port far down the Ports view scrolls into sight", () => {
+		const many = Array.from({ length: 30 }, (_, i) => ({ port: 3000 + i, service: null, preview: null }));
+		const s = open(undefined, { rows: 20, shown: { ...detail, ports: many } });
+		s.normal("3");
+		s.press("G");
+		expect(s.text()).toMatch(/→ ● 3029/);
+		s.press("g");
+		s.press("g");
+		expect(s.text()).toMatch(/→ ● web/);
 	});
 
 	test("the ports section says why it lists nothing, and names a service's port", () => {
 		const inspect = (d: ThreadDetail) => {
 			const s = open();
 			s.details(d);
-			s.press(keys.altI);
+			s.normal("3");
 			// Wide enough that the hint does not wrap.
 			return plain(s.screen.render(160));
 		};
@@ -301,13 +517,13 @@ describe("thread view", () => {
 
 	test("/open publishes a port, shows it opening, then lists it under Previews", async () => {
 		const s = open(undefined, { opened: new Map([[8080, own]]) });
-		s.press(keys.altI);
+		s.normal("3");
 		await s.type("/open 8080");
 		expect(s.previewed).toEqual([8080]);
 		expect(s.text()).toContain("● 8080  opening: publishing it and waiting for the node to serve its URL...");
 		await s.type("/open 8080");
 		expect(s.previewed).toEqual([8080]);
-		expect(s.text()).toContain("Port 8080 is opening already.");
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
 		s.release();
 		await s.settle();
 		expect(s.text()).toMatch(/Previews 2\n.*\n.*\n +● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +\/unpublish 8080 closes it\n/);
@@ -320,7 +536,7 @@ describe("thread view", () => {
 	test("/open says why a port did not open, and tries again", async () => {
 		const opened = new Map<number, Opened>([[8080, new Error("nexus: the pylon is not running (exit 5)")]]);
 		const s = open(undefined, { opened });
-		s.press(keys.altI);
+		s.normal("3");
 		await s.type("/open 8080");
 		s.release();
 		await s.settle();
@@ -340,7 +556,7 @@ describe("thread view", () => {
 
 	test("/unpublish shows the preview closing, then the port back under Ports before the details are read again", async () => {
 		const s = open(undefined, { shown: published });
-		s.press(keys.altI);
+		s.normal("3");
 		expect(s.text()).toMatch(/● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +\/unpublish 8080 closes it\n/);
 		await s.type("/unpublish 8080");
 		expect(s.unpublished).toEqual([8080]);
@@ -349,7 +565,7 @@ describe("thread view", () => {
 		await s.type("/open 8080");
 		expect(s.unpublished).toEqual([8080]);
 		expect(s.previewed).toEqual([]);
-		expect(s.text()).toContain("Port 8080 is closing already.");
+		expect(s.text().replace(/\s+/g, " ")).toContain(busy);
 		s.release();
 		await s.settle();
 		expect(s.text()).not.toContain("port-8080");
@@ -360,7 +576,7 @@ describe("thread view", () => {
 
 	test("an unpublished port stays under Ports until details asked for after it, whatever an older read or a failed /open says", async () => {
 		const s = open(undefined, { shown: published, opened: new Map([[8080, new Error("nexus: the pylon is not running (exit 5)")]]) });
-		s.press(keys.altI);
+		s.normal("3");
 		const before = s.screen.mark();
 		await s.type("/unpublish 8080");
 		s.release();
@@ -382,7 +598,7 @@ describe("thread view", () => {
 
 	test("a port opened here and unpublished elsewhere before the next details shows under Ports, and /copy forgets it", async () => {
 		const s = open(undefined, { opened: new Map([[8080, own]]) });
-		s.press(keys.altI);
+		s.normal("3");
 		await s.type("/open 8080");
 		s.release();
 		await s.settle();
@@ -408,7 +624,7 @@ describe("thread view", () => {
 		const refusal = "nexus: port 5173 is previewed by the service web, which keeps its preview";
 		const refused = new Map([[5173, new Error(refusal)], [8080, new Error("nexus: the node firebat is unreachable")]]);
 		const s = open(undefined, { shown: published, refused });
-		s.press(keys.altI);
+		s.normal("3");
 		expect(s.text()).not.toContain("/unpublish 5173");
 		await s.type("/unpublish 8080");
 		s.release();
@@ -422,7 +638,7 @@ describe("thread view", () => {
 		expect(s.text()).toContain("/unpublish needs a port number, such as /unpublish 8080.");
 		expect(s.unpublished).toEqual([8080, 5173]);
 		const archived = open(undefined, { shown: { ...published, thread: { ...published.thread, status: "archived" } } });
-		archived.press(keys.altI);
+		archived.normal("3");
 		expect(archived.text()).toContain("● port-8080 paused");
 		expect(archived.text()).not.toContain("/unpublish");
 	});
@@ -430,7 +646,7 @@ describe("thread view", () => {
 	test("a preview whose /open is still waiting offers no /unpublish", async () => {
 		const starting = { ...own, ready: false };
 		const s = open(undefined, { opened: new Map([[8080, own]]) });
-		s.press(keys.altI);
+		s.normal("3");
 		await s.type("/open 8080");
 		// The details list the preview, still starting, while the CLI waits for the node.
 		s.details({ ...detail, previews: [webPreview, starting], ports: [ports[0]!, { port: 8080, service: null, preview: starting }] });
@@ -498,10 +714,58 @@ describe("thread view", () => {
 		const s = open(undefined, { rows: 20 });
 		const end = s.text();
 		s.press(keys.pageUp);
-		expect(s.text()).toMatch(/↓ \d+ more lines, pgdn to scroll/);
+		expect(s.text()).toMatch(/↓ \d+ more lines, G follows the end/);
 		s.press(keys.pageDown);
 		s.press(keys.pageDown);
 		expect(s.text()).toBe(end);
+	});
+
+	test("keys a terminal sends as xterm modifyOtherKeys sequences type as they do in pi's editor", () => {
+		const s = open(undefined, { rows: 20 });
+		const end = s.text();
+		s.press("k");
+		expect(s.text()).not.toBe(end);
+		// G with Shift, as ESC[27;2;71~, follows the end again.
+		s.press("\x1b[27;2;71~");
+		expect(s.text()).toBe(end);
+		// g twice, unmodified, goes to the top.
+		s.press("\x1b[27;1;103~", "\x1b[27;1;103~");
+		expect(s.text()).toContain("Fix the retry in probe.ts so it backs off.");
+		// ctrl+g types nothing, so g, ctrl+g, g is not gg.
+		s.press("\x1b[27;2;71~", "\x1b[27;1;103~", "\x1b[27;5;103~", "g");
+		expect(s.text()).not.toContain("Fix the retry in probe.ts so it backs off.");
+		expect(s.text()).toMatch(/\nNORMAL {2}g {2}/);
+	});
+
+	test("vim's keys scroll: k and j a line, u and d or ctrl+u and ctrl+d half a page, gg the top and G or ge back to following", () => {
+		const s = open(undefined, { rows: 20 });
+		const end = s.text();
+		const more = () => Number(/↓ (\d+) more line/.exec(s.text())?.[1] ?? 0);
+		s.press("k");
+		expect(more()).toBe(1);
+		s.press(keys.ctrlU);
+		const half = more() - 1;
+		expect(half).toBeGreaterThan(1);
+		s.press(keys.ctrlD);
+		s.press("j");
+		expect(s.text()).toBe(end);
+		s.press("u");
+		expect(more()).toBe(half);
+		s.press("d");
+		expect(s.text()).toBe(end);
+		s.press("g");
+		s.press("g");
+		expect(s.text()).toContain("Fix the retry in probe.ts so it backs off.");
+		s.press("g", "e");
+		expect(s.text()).toBe(end);
+		s.press("g", "g");
+		// A g waiting for its pair shows beside the mode.
+		s.press("g");
+		expect(s.text()).toMatch(/\nNORMAL {2}g {2}/);
+		s.press("G");
+		expect(s.text()).toBe(end);
+		s.screen.setView({ entries, state: working, live: { ...live, tools: [{ callId: runningCall, output: "more output" }] } });
+		expect(s.text()).toContain("more output");
 	});
 });
 

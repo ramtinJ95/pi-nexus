@@ -2,12 +2,15 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { createNexus, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
+import { chips, noteParked, summary, type Parked } from "./console/model.ts";
+import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
 import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
-import type { Thread } from "./contract.ts";
-import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, workingCount, type ThreadView } from "./thread.ts";
+import type { ThreadRow } from "./contract.ts";
+import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
+import { defaultSettingsFile, defaultViewedFile, settingsFile, viewedFile, type SettingsStore, type Viewed } from "./store.ts";
 
 const statusEveryMs = 30_000;
 
@@ -23,40 +26,88 @@ const ends: Readonly<Record<FollowEnd, string>> = {
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
- * One pi session's Nexus state: the follows it runs and the status line. The status line starts with the first
- * /nexus command or Nexus tool call, so sessions that never touch Nexus never poll it. Every CLI process the session
- * starts ends with it, since pi replaces the extension runtime after a shutdown.
+ * One pi session's Nexus state: the follows it runs, and the status line and strip, which poll the threads from the
+ * session's start while the strip setting is on. `/nexus strip off` stops the polling, so a session that does not
+ * want the summary never polls. Every CLI process the session starts ends with it, since pi replaces the extension
+ * runtime after a shutdown.
  */
 class NexusSession {
 	readonly closed = new AbortController();
 	private ui: ExtensionUIContext | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
+	/** The polling of the threads for the summary and strip, while the strip setting is on. */
+	private polling: AbortController | undefined;
 	private readonly follows = new Map<string, { stop: AbortController; view: ThreadView }>();
 	/** The threads last listed, for completion and titles. */
-	threads: Thread[] = [];
+	threads: ThreadRow[] = [];
+	/** Whether the status line's summary and the strip show, and so whether the session polls the threads. */
+	private strip: boolean;
+	/** The threads seen parked, from the console's open thread and the follows. */
+	private readonly parked: Parked = new Map();
 	private readonly console: Console;
+	private readonly viewed: Viewed;
+	private readonly settings: SettingsStore;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly nexus: Nexus,
 		display: (cwd: string) => Display,
+		stores: Stores,
 	) {
-		this.console = new Console(nexus, this.closed.signal, display);
+		({ viewed: this.viewed, settings: this.settings } = stores);
+		this.strip = this.settings.read().strip;
+		this.console = new Console(nexus, this.closed.signal, this.viewed, this.parked, (message) => this.ui?.notify(message, "warning"), display);
 	}
 
+	/** Takes the session's UI, and polls the threads while the strip setting is on. */
 	attach(ui: ExtensionUIContext): void {
 		if (this.closed.signal.aborted) return;
 		this.ui = ui;
-		this.timer ??= setInterval(() => void this.refresh(), statusEveryMs).unref();
+		if (!this.strip || this.polling !== undefined) return;
+		this.polling = new AbortController();
+		this.timer = setInterval(() => void this.refresh(), statusEveryMs).unref();
 	}
 
+	/** The session's start, where the summary and strip show at once rather than on the first poll. */
+	start(ui: ExtensionUIContext): void {
+		this.attach(ui);
+		if (this.strip) void this.refresh();
+	}
+
+	/** Ends the polling, and the poll in flight with it, so no reply lands after the strip turned off. */
+	private stopPolling(): void {
+		this.polling?.abort();
+		this.polling = undefined;
+		clearInterval(this.timer);
+		this.timer = undefined;
+		this.ui?.setStatus("nexus", undefined);
+		this.ui?.setWidget("nexus-strip", undefined);
+	}
+
+	/**
+	 * Lists the threads for completion and the stored looks, and while the session polls, shows the summary and the
+	 * strip. A poll ends when the polling stops; a list after a command with the strip off ends with the session.
+	 */
 	async refresh(): Promise<void> {
 		if (this.closed.signal.aborted) return;
+		const polling = this.polling;
+		const signal = polling ? AbortSignal.any([polling.signal, this.closed.signal]) : this.closed.signal;
 		try {
-			this.threads = await listThreads(this.nexus, [], this.closed.signal);
-			this.ui?.setStatus("nexus", `nexus ${workingCount(this.threads)} working`);
+			const listedAt = Date.now();
+			this.threads = await listThreads(this.nexus, [], signal);
+			// The list leaves out only deleted threads, whose looks no marker reads again. A prune that cannot write
+			// keeps them, which costs nothing, and the next look says the store cannot be written.
+			try {
+				this.viewed.prune(new Set(this.threads.map((t) => t.id)), listedAt);
+			} catch {}
+			if (polling === undefined || signal.aborted) return;
+			const marks = { seen: this.viewed.read(), parked: this.parked };
+			this.ui?.setStatus("nexus", summary(this.threads, marks));
+			const shown = chips(this.threads, marks);
+			const now = Date.now();
+			this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now) : undefined);
 		} catch (err) {
-			if (!this.closed.signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
+			if (polling !== undefined && !signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
 		}
 	}
 
@@ -81,6 +132,7 @@ class NexusSession {
 			note: (note: Note) => this.note(note),
 			state: (view: ThreadView) => {
 				entry.view = view;
+				noteParked(this.parked, thread, view.state, Date.now());
 				this.renderFollows();
 			},
 		};
@@ -160,6 +212,16 @@ class NexusSession {
 				if (stopped === 0) ctx.ui.notify("Not following that.", "info");
 				return;
 			}
+			case "strip":
+				this.strip = command.on;
+				try {
+					this.settings.write({ ...this.settings.read(), strip: command.on });
+				} catch (err) {
+					ctx.ui.notify(`The strip is ${command.on ? "on" : "off"} for this session only, since its setting could not be saved: ${errorText(err)}`, "warning");
+				}
+				if (!command.on) return this.stopPolling();
+				this.attach(ctx.ui);
+				return this.refresh();
 			case "unpublish": {
 				const thread = await id(command.thread);
 				await unpreviewPort(nexus, thread, command.port, signal);
@@ -181,16 +243,29 @@ class NexusSession {
 
 	shutdown(): void {
 		this.closed.abort();
+		this.polling?.abort();
 		clearInterval(this.timer);
 		this.ui?.setStatus("nexus", undefined);
 		this.ui?.setWidget("nexus", undefined);
+		this.ui?.setWidget("nexus-strip", undefined);
 		this.ui = undefined;
 	}
 }
 
-/** `display` reads pi's display settings, which a test replaces so it never reads the user's own. */
-export default function nexusExtension(pi: ExtensionAPI, nexus: Nexus = createNexus(), display: (cwd: string) => Display = userDisplay) {
-	const session = new NexusSession(pi, nexus, display);
+/** When each thread was last looked at, and the console's settings, kept in pi's agent directory. */
+interface Stores {
+	viewed: Viewed;
+	settings: SettingsStore;
+}
+
+/** `display` reads pi's display settings, and a test replaces the stores so it never touches the user's own. */
+export default function nexusExtension(
+	pi: ExtensionAPI,
+	nexus: Nexus = createNexus(),
+	display: (cwd: string) => Display = userDisplay,
+	stores: Stores = { viewed: viewedFile(defaultViewedFile()), settings: settingsFile(defaultSettingsFile()) },
+) {
+	const session = new NexusSession(pi, nexus, display, stores);
 	pi.registerEntryRenderer(noteType, renderNote);
 	for (const tool of nexusTools(nexus)) {
 		pi.registerTool({
@@ -211,13 +286,20 @@ export default function nexusExtension(pi: ExtensionAPI, nexus: Nexus = createNe
 		getArgumentCompletions: (prefix) => complete(prefix, session.threads),
 		async handler(args, ctx) {
 			session.attach(ctx.ui);
+			let command: NexusCommand | undefined;
 			try {
-				await session.run(parseCommand(args), ctx);
+				command = parseCommand(args);
+				await session.run(command, ctx);
 			} catch (err) {
 				if (!session.closed.signal.aborted) ctx.ui.notify(`nexus: ${errorText(err)}`, "error");
 			}
-			void session.refresh();
+			// strip on refreshes itself, and strip off must not list again.
+			if (command?.name !== "strip") void session.refresh();
 		},
+	});
+	// Print and JSON modes have no status line or widgets to fill.
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.hasUI) session.start(ctx.ui);
 	});
 	pi.on("session_shutdown", () => session.shutdown());
 }

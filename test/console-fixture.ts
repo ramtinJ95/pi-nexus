@@ -4,6 +4,7 @@ import { initTheme, theme } from "../node_modules/@earendil-works/pi-coding-agen
 import { getMarkdownTheme, type KeybindingsManager as Keybindings, type Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Display } from "../extensions/nexus/console/transcript.ts";
+import type { Settings, SettingsStore, Viewed } from "../extensions/nexus/store.ts";
 import type { AssistantMessage, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { idA, thread } from "./fixtures.ts";
 
@@ -98,3 +99,37 @@ export const plain = (lines: readonly string[]) =>
 	lines
 		.map((l) => l.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b_[^\x07]*\x07/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd())
 		.join("\n");
+
+/** Looks kept in memory, so a test never touches the user's own. Every thread counts as looked at from `since`. */
+export function memoryViewed(since = 0): Viewed & { looks: [string, number][] } {
+	const threads: Record<string, number> = {};
+	const looks: [string, number][] = [];
+	return {
+		looks,
+		read: () => ({ since, threads: { ...threads } }),
+		mark(thread, at) {
+			looks.push([thread, at]);
+			threads[thread] = Math.max(threads[thread] ?? 0, at);
+		},
+		prune(kept, listedAt) {
+			for (const [thread, at] of Object.entries(threads)) if (!kept.has(thread) && at < listedAt) delete threads[thread];
+		},
+	};
+}
+
+/** Settings kept in memory, with each write recorded. */
+export function memorySettings(settings: Settings = { strip: true }): SettingsStore & { writes: Settings[] } {
+	let kept = settings;
+	const writes: Settings[] = [];
+	return {
+		writes,
+		read: () => kept,
+		write(next) {
+			writes.push(next);
+			kept = next;
+		},
+	};
+}
+
+/** The extension's stores, in memory. */
+export const memoryStores = (viewed = memoryViewed(), settings = memorySettings()) => ({ viewed, settings });
