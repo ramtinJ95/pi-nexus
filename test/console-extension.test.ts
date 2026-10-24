@@ -715,7 +715,9 @@ describe("console", () => {
 				n.start();
 				await n.run("project sketch");
 				expect(n.notified.at(-1)).toEqual(["Nexus shows the project sketch.", "info"]);
-				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working", "the summary of sketch");
+				// The looks store starts at 0, so the idle scratch thread, with activity at 1_000, is new once the threads are
+				// listed. A summary drawn before the start's list lands counts no threads, so only the listed one is waited for.
+				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working · 1 new", "the summary of sketch");
 			});
 
 			test("a project add whose reply is a scratch project says so as the CLI does", async () => {
