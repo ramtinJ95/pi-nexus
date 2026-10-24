@@ -72,6 +72,9 @@ describe("/nexus arguments", () => {
 		expect(invalid("project add spoon 'git@github.com:o/spoon.git --node firebat")).toStartWith("project has a quote it does not close\n/nexus");
 		expect(invalid('new acme --title "Flaky fix it')).toStartWith("new has a quote it does not close\n/nexus");
 		expect(invalid('"open 0123')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid('"new')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid('new"')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid("send' th-01 hi")).toStartWith("/nexus has a quote it does not close\n/nexus");
 		expect(parseCommand("send th-01 don't stop")).toEqual({ name: "send", thread: "th-01", text: "don't stop" });
 		expect(parseCommand("new acme --title \"it's\" don't stop")).toEqual({ name: "new", project: "acme", title: "it's", message: "don't stop" });
 	});

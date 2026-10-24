@@ -115,7 +115,8 @@ export function parseCommand(input: string): NexusCommand {
 		const open = tokens.findIndex((t) => t.open);
 		if (open !== -1 && open < end) throw invalid(`${open === 0 ? "/nexus" : name} has a quote it does not close`);
 	};
-	if (name !== "new" && name !== "send") closedBefore(tokens.length);
+	// A message as typed can hold a lone apostrophe; anything else, the command name included, closes its quotes.
+	closedBefore(name === "new" || name === "send" ? 1 : tokens.length);
 	const arg = (i: number, what: string) => {
 		const value = args[i];
 		if (value === undefined) throw invalid(`${name} needs ${what}`);
