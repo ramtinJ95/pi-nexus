@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { NodeSummary, parse, Preview, Project, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -13,6 +13,8 @@ export interface Nexus {
 	run(args: readonly string[], signal?: AbortSignal): Promise<unknown>;
 	/** Streams `nexus watch <thread> --json` until the thread is deleted or `signal` aborts. */
 	watch(thread: string, onEvent: (event: WatchEvent) => void, signal: AbortSignal): Promise<void>;
+	/** Runs `nexus attach <thread> --json` on this process's terminal, and resolves once the person detaches. */
+	attach(thread: string): Promise<void>;
 }
 
 export const defaultBin = () => process.env.NEXUS_BIN || "nexus";
@@ -33,6 +35,17 @@ function failure(code: number | null, stderr: string): NexusError {
 
 const spawnFailure = (bin: string, err: Error) =>
 	new NexusError("failed", `cannot run ${bin}: ${err.message}. Install the nexus CLI or point NEXUS_BIN at it`);
+
+/** `err`, or for a CLI too old to have `command`, an error that names the version `doing` needs. */
+function newer(err: unknown, command: string, doing: string, version: string): unknown {
+	if (err instanceof NexusError && err.kind === "invalid" && err.message === `unknown command ${command.split(" ")[0]}`) {
+		return new NexusError("invalid", `nexus has no ${command} command: ${doing} needs Nexus CLI ${version} or later (nexus --version)`);
+	}
+	return err;
+}
+
+/** How much of an attach's stderr is kept for its failure, whose own line comes last. */
+const attachStderrKept = 8_192;
 
 export function createNexus(bin: string = defaultBin()): Nexus {
 	return {
@@ -92,6 +105,21 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 					else if (code === 0 || signal.aborted) resolve();
 					else reject(failure(code, stderr));
 				});
+			});
+		},
+
+		attach(thread) {
+			return new Promise((resolve, reject) => {
+				// The terminal is the CLI's, then ssh's. Its stderr goes on to the terminal as it comes, so ssh's prompts
+				// show, and its tail is kept, so a failure reads as the CLI's own.
+				const child = spawn(bin, ["attach", "--json", thread], { stdio: ["inherit", "inherit", "pipe"] });
+				let stderr = "";
+				child.stderr.on("data", (chunk: Buffer) => {
+					process.stderr.write(chunk);
+					stderr = (stderr + chunk.toString()).slice(-attachStderrKept);
+				});
+				child.on("error", (err) => reject(spawnFailure(bin, err)));
+				child.on("close", (code) => (code === 0 ? resolve() : reject(failure(code, stderr))));
 			});
 		},
 	};
@@ -161,10 +189,7 @@ export const unpreviewPort = (nexus: Nexus, thread: string, port: number, signal
 		try {
 			parse(Unpreviewed, await nexus.run(["unpreview", thread, String(port)], signal), "nexus unpreview");
 		} catch (err) {
-			if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command unpreview") {
-				throw new NexusError("invalid", "nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
-			}
-			throw err;
+			throw newer(err, "unpreview", "unpublishing a preview", "0.3.0");
 		}
 	});
 export const listProjects = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(Project), await nexus.run(["projects"], signal), "nexus projects");
@@ -178,10 +203,44 @@ export async function addProject(nexus: Nexus, add: { id: string; repoUrl: strin
 	try {
 		return parse(Project, await nexus.run(["project add", ...flags, "--", add.id, add.repoUrl], signal), "nexus project add");
 	} catch (err) {
-		if (err instanceof NexusError && err.kind === "invalid" && err.message === "unknown command project") {
-			throw new NexusError("invalid", "nexus has no project add command: adding a project needs Nexus CLI 0.4.0 or later (nexus --version)");
-		}
-		throw err;
+		throw newer(err, "project add", "adding a project", "0.4.0");
+	}
+}
+
+/**
+ * Opens a session in the pylon, which needs CLI 0.5.0: a Herdr workspace with the harness's agent in it, Claude Code
+ * unless `harness` names another, titled with the harness's name unless `title` is given. A paused pylon is woken
+ * first, and the agent can take most of a minute to start, so this can take up to the CLI's two minutes. An abort
+ * ends the wait, but the session may open all the same. `=` keeps a title that starts with a dash from reading as a
+ * flag.
+ */
+export async function openSession(nexus: Nexus, thread: string, open: { harness?: string; title?: string }, signal?: AbortSignal): Promise<OpenedSession> {
+	const flags = (["harness", "title"] as const).flatMap((key) => (open[key] ? [`--${key}=${open[key]}`] : []));
+	try {
+		return parse(OpenedSession, await nexus.run(["session open", ...flags, "--", thread], signal), "nexus session open");
+	} catch (err) {
+		throw newer(err, "session open", "opening a session", "0.5.0");
+	}
+}
+
+/** Closes a session's pane, which ends its agent, and needs CLI 0.5.0. A pane already closed succeeds. */
+export async function closeSession(nexus: Nexus, thread: string, pane: string, signal?: AbortSignal): Promise<void> {
+	try {
+		parse(SessionClosed, await nexus.run(["session close", "--", thread, pane], signal), "nexus session close");
+	} catch (err) {
+		throw newer(err, "session close", "closing a session", "0.5.0");
+	}
+}
+
+/**
+ * Gives this process's terminal to the pylon's Herdr session, through `nexus attach`, until the person detaches.
+ * The caller must have released the terminal first. It needs CLI 0.5.0.
+ */
+export async function attachThread(nexus: Nexus, thread: string): Promise<void> {
+	try {
+		await nexus.attach(thread);
+	} catch (err) {
+		throw newer(err, "attach", "attaching", "0.5.0");
 	}
 }
 export const listNodes = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(NodeSummary), await nexus.run(["nodes"], signal), "nexus nodes");

@@ -6,7 +6,8 @@ import { parseArgs } from "node:util";
 const argv = process.argv.slice(2);
 appendFileSync(process.env.FAKE_NEXUS_LOG, `${JSON.stringify(argv)}\n`);
 const scenario = JSON.parse(readFileSync(process.env.FAKE_NEXUS, "utf8"));
-const command = argv[0];
+// `session open` and `session close` answer apart, by both words.
+const command = argv[0] === "session" ? `session ${argv[1]}` : argv[0];
 // `after` holds replies that replace `responses` once a command has answered, as `show` changes after `unpreview`.
 const answered = `${process.env.FAKE_NEXUS}.answered`;
 const ran = existsSync(answered) ? readFileSync(answered, "utf8").split("\n") : [];
@@ -24,7 +25,9 @@ if (process.env.FAKE_NEXUS_PIDS) {
 	process.on("exit", () => appendFileSync(process.env.FAKE_NEXUS_PIDS, `${process.pid} exit\n`));
 }
 
-if (command === "watch") {
+if (command === "attach") {
+	// The terminal is the attach's, and it prints nothing of its own.
+} else if (command === "watch") {
 	// watchExitDelayMs stands in for a CLI that takes a while to exit after it is told to stop.
 	process.on("SIGTERM", () =>
 		setTimeout(() => {

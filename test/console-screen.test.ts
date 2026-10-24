@@ -3,14 +3,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Action } from "../extensions/nexus/commands.ts";
 import { ThreadScreen, type ScreenEnd } from "../extensions/nexus/console/thread-screen.ts";
-import type { Preview, RenderedEntry, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
+import type { OpenedSession, Preview, RenderedEntry, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { reduce, type ThreadView } from "../extensions/nexus/thread.ts";
 import { asked, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { idA, idle } from "./fixtures.ts";
 
 /** The note a second change of port 8080 gets while one runs, as every entry point says it. */
 const busy = `Port 8080 on ${idA} is already being published or unpublished. Try again when it finishes.`;
-const keys = { enter: "\r", escape: "\x1b", down: "\x1b[B", up: "\x1b[A", pageUp: "\x1b[5~", pageDown: "\x1b[6~", ctrlO: "\x0f", ctrlD: "\x04", ctrlU: "\x15" };
+const keys = { enter: "\r", escape: "\x1b", tab: "\t", right: "\x1b[C", down: "\x1b[B", up: "\x1b[A", pageUp: "\x1b[5~", pageDown: "\x1b[6~", ctrlO: "\x0f", ctrlD: "\x04", ctrlU: "\x15" };
 const screens: ThreadScreen[] = [];
 afterEach(() => screens.splice(0).forEach((s) => s.dispose()));
 
@@ -20,16 +20,33 @@ type Opened = Preview | Error;
 /** Port 8080 published on its own, beside the web service's preview. */
 const own: Preview = { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" };
 const published: ThreadDetail = { ...detail, previews: [webPreview, own], ports: [ports[0]!, { port: 8080, service: null, preview: own }] };
+/** A Claude Code session with a title, the fixture's pi session, and a shell from a control plane older than titles. */
+const withSessions: ThreadDetail = {
+	...detail,
+	sessions: [{ harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: "sid-1", title: "login fix" }, detail.sessions[0]!, { harness: "shell", herdrPane: "%9", status: "unknown", harnessSessionId: null }],
+};
 
 function open(
 	view: ThreadView = { entries, state: working, live },
-	{ rows = 60, sendFails = 0, opened = new Map<number, Opened>(), refused = new Map<number, Error>(), copyFails = false, shown = detail as ThreadDetail | null } = {},
+	{
+		rows = 60,
+		sendFails = 0,
+		opened = new Map<number, Opened>(),
+		refused = new Map<number, Error>(),
+		copyFails = false,
+		shown = detail as ThreadDetail | null,
+		session = { herdrPane: "%7", harness: "claude-code", title: "claude-code" } as OpenedSession | Error,
+		attachFails = undefined as Error | undefined,
+	} = {},
 ) {
 	const sent: { text: string; steer: boolean; requestId: string }[] = [];
 	const acted: Action[] = [];
 	const previewed: number[] = [];
 	const unpublished: number[] = [];
 	const copied: string[] = [];
+	const sessionsOpened: { harness: string; title: string | undefined }[] = [];
+	const sessionsClosed: string[] = [];
+	let attaches = 0;
 	// Each preview waits for `release`, as `nexus preview --wait` waits for the node.
 	let release = () => {};
 	const ends: ScreenEnd[] = [];
@@ -66,6 +83,20 @@ function open(
 				const refusal = refused.get(port);
 				if (refusal) throw refusal;
 			},
+			async openSession(harness, title) {
+				sessionsOpened.push({ harness, title });
+				await new Promise<void>((resolve) => (release = resolve));
+				if (session instanceof Error) throw session;
+				return session;
+			},
+			async closeSession(pane) {
+				sessionsClosed.push(pane);
+				await new Promise<void>((resolve) => (release = resolve));
+			},
+			async attach() {
+				attaches++;
+				if (attachFails) throw attachFails;
+			},
 			refresh() {
 				refreshes++;
 			},
@@ -100,7 +131,7 @@ function open(
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 	/** Details as the console reads them, asked for now or at the earlier mark `askedAt`. */
 	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
-	return { screen, tui, sent, acted, previewed, unpublished, copied, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
+	return { screen, tui, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
 }
 
 describe("thread view", () => {
@@ -169,9 +200,11 @@ describe("thread view", () => {
 		expect(cursor()).toBe(false);
 		s.press("l");
 		expect(s.text()).toContain("Pylon");
-		s.press("l", "l");
+		s.press("l");
 		expect(s.text()).toContain("Previews 1");
-		s.press("h", "h");
+		s.press("l", "l");
+		expect(s.text()).toContain("Attach from this Mac");
+		s.press("h", "h", "h");
 		expect(s.text()).toContain("I'll read the probe first.");
 		s.press("i");
 		expect(cursor()).toBe(true);
@@ -304,7 +337,7 @@ describe("thread view", () => {
 		s.normal("2");
 		expect(s.text()).toContain("Pylon");
 		s.press(keys.escape);
-		expect(s.text()).not.toContain("Sessions 1");
+		expect(s.text()).not.toContain("Desired");
 		s.press(keys.escape);
 		expect(s.ends).toEqual([]);
 		s.press("h");
@@ -419,7 +452,7 @@ describe("thread view", () => {
 		expect(s.ends).toEqual([{ kind: "start-again", project: "nexus", title: "Fix the probe retry" }]);
 	});
 
-	test("Details shows the pylon, outputs, sessions and attach command, and Ports the previews and ports", () => {
+	test("Details shows the pylon, outputs and attach command, and Ports the previews and ports", () => {
 		const s = open();
 		s.screen.setNodes([{ name: "firebat", state: "offline" }]);
 		s.normal("2");
@@ -429,7 +462,7 @@ describe("thread view", () => {
 		expect(details).toMatch(/Last seen +1 min ago \(stale\)/);
 		// The preview output repeats the listed preview, so only the branch is left.
 		expect(details).toMatch(/Outputs 1\n +branch +nexus\/th-0123456789ab\n\n/);
-		expect(details).toMatch(/pi +● working  %3  session abc/);
+		expect(details).not.toContain("%3");
 		expect(details).toContain("herdr --session nexus");
 		expect(details).not.toContain("Previews");
 		s.press("3");
@@ -442,7 +475,7 @@ describe("thread view", () => {
 		// Each port shows once: 5173 under Previews, and 8080, which has no preview, under Ports.
 		expect(out).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
 		expect(out.match(/5173/g)).toHaveLength(1);
-		expect(out).toContain("1 Conversation   2 Details   3 Ports 2");
+		expect(out).toContain("1 Conversation   2 Details   3 Ports 2   4 Sessions 1");
 	});
 
 	test("in Ports, j and k select a row, Enter publishes a port, x unpublishes its own preview, and y copies a link", async () => {
@@ -481,6 +514,111 @@ describe("thread view", () => {
 		s.press("g");
 		s.press("k");
 		expect(s.text()).toMatch(/→ ● web/);
+	});
+
+	test("Sessions lists each session with its title, selects with j and k, and says how to attach from this Mac", () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("4");
+		const out = s.text();
+		expect(out).toContain("1 Conversation   2 Details   3 Ports 2   4 Sessions 3");
+		expect(out).toMatch(/Sessions 3\n → Claude Code  login fix  ● idle  %5  session sid-1\n     enter or \/attach attaches this terminal, x closes the session\n +pi +● working  %3  session abc\n +Shell +● unknown  %9\n/);
+		expect(out).toContain("Attach from this Mac\n   nexus attach th-0123456789ab\n   enter runs it here, and y copies it.");
+		expect(out).toContain('set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json');
+		expect(out).toMatch(/NORMAL  i write  j\/k select  enter attach  x close  n open  y copy/);
+		s.press("j");
+		expect(s.text()).toMatch(/→ pi +● working  %3  session abc\n     enter or \/attach/);
+		s.press("G");
+		expect(s.text()).toMatch(/→ Shell/);
+		const none = open(undefined, { shown: { ...detail, sessions: [] } });
+		none.normal("4");
+		expect(none.text()).toContain("No sessions. n opens one: Claude Code, pi or a shell.");
+	});
+
+	test("n opens the session form on Claude Code, ←→ choose the harness, and Enter opens it, opening, then opened", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("n");
+		expect(s.text()).toContain(" Open a session in the pylon\n → Harness  [Claude Code]  pi   Shell\n   Title    > optional; claude-code when empty");
+		expect(s.text()).toMatch(/NORMAL  tab next field  ←→ harness  enter open  esc cancel/);
+		s.press(keys.escape);
+		expect(s.text()).not.toContain("Open a session in the pylon");
+		s.press("n", keys.right);
+		expect(s.text()).toContain("→ Harness   Claude Code  [pi]  Shell");
+		s.press(keys.tab, ..."review", keys.enter);
+		expect(s.sessionsOpened).toEqual([{ harness: "pi", title: "review" }]);
+		// The view goes to Sessions, where the open shows until the CLI answers.
+		expect(s.text()).toMatch(/● Opening pi "review"\.\.\.\n     Waking the pylon if it is paused, then starting the agent, which can take a minute\./);
+		expect(s.text()).toContain('Opening pi "review". Its agent can take a minute to start.');
+		const refreshes = s.refreshes();
+		s.release();
+		await s.settle();
+		expect(s.text()).not.toContain("Opening pi");
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		expect(s.text().replace(/\s+/g, " ")).toContain('Opened Claude Code "claude-code" in pane %7. Enter in Sessions, or /attach, attaches this terminal: pick the session\'s workspace in Herdr.');
+		expect(s.refreshes()).toBe(refreshes + 1);
+		// Details asked for after the open are the sessions as they are.
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, { harness: "claude-code", herdrPane: "%7", status: "blocked", harnessSessionId: "sid-7", title: "claude-code" }] });
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● blocked  %7  session sid-7/);
+		// Enter on the harness opens Claude Code with the CLI's default title.
+		s.press("n", keys.enter);
+		expect(s.sessionsOpened.at(-1)).toEqual({ harness: "claude-code", title: undefined });
+		s.release();
+		await s.settle();
+	});
+
+	test("a session that does not open says why, in the CLI's words", async () => {
+		const tooOld = "nexus has no session open command: opening a session needs Nexus CLI 0.5.0 or later (nexus --version)";
+		const s = open(undefined, { session: new Error(tooOld) });
+		await s.type("/session");
+		expect(s.text()).toContain("Open a session in the pylon");
+		s.press(keys.enter);
+		s.release();
+		await s.settle();
+		expect(s.text().replace(/\s+/g, " ")).toContain(`The session did not open: ${tooOld}`);
+		expect(s.text()).toMatch(/Sessions 1\n → pi +● working/);
+	});
+
+	test("x in Sessions asks with Keep first, and Close closes the selected session", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("4", "j", "x");
+		expect(s.text()).toContain("Close pi in pane %3? Its agent ends.\n→ Keep\n  Close");
+		s.press(keys.enter);
+		expect(s.text()).toContain("Kept the session.");
+		expect(s.sessionsClosed).toEqual([]);
+		s.press("x", "j", keys.enter);
+		expect(s.sessionsClosed).toEqual(["%3"]);
+		expect(s.text()).toMatch(/→ pi +● closing\.\.\.  %3/);
+		s.press("x");
+		expect(s.text()).toContain("Pane %3 is already closing.");
+		s.release();
+		await s.settle();
+		expect(s.text()).toContain("Closed pane %3.");
+		expect(s.text()).not.toMatch(/pi +● /);
+		expect(s.text()).toContain("4 Sessions 2");
+	});
+
+	test("Enter in Sessions, /attach and Attach in the actions attach this terminal, and say how it ended", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("m");
+		expect(s.text()).toMatch(/Copy the attach command.*\n.*Open a session.*\n.*Attach .*this terminal to the pylon's sessions/);
+		s.press(keys.escape, "4", keys.enter);
+		await s.settle();
+		expect(s.attaches()).toBe(1);
+		expect(s.text()).toContain("Detached from the pylon's sessions.");
+		await s.type("/attach");
+		expect(s.attaches()).toBe(2);
+		s.normal("y");
+		await s.settle();
+		expect(s.copied).toEqual(["nexus attach th-0123456789ab"]);
+		const why = 'attaching to th-0123456789ab on firebat failed: ssh to firebat.example exited 255. To reach the node as another user or through an ssh alias, set "ssh": {"firebat": "<user@host or alias>"} in ~/.config/nexus/cli.json, or set NEXUS_ATTACH, as docs/cli.md describes';
+		const failed = open(undefined, { attachFails: new Error(why) });
+		failed.normal("m", ..."jjjjj", keys.enter);
+		await failed.settle();
+		expect(failed.attaches()).toBe(1);
+		expect(failed.text().replace(/\s+/g, " ")).toContain(`Attaching failed: ${why}`);
+		const archived = open({ entries, state: { ...idle, status: "archived" } });
+		archived.press("m");
+		expect(archived.text()).not.toContain("Open a session");
+		expect(archived.text()).not.toMatch(/^ *(→ )?Attach /m);
 	});
 
 	test("a selected port far down the Ports view scrolls into sight", () => {

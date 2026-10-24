@@ -73,6 +73,31 @@ export type ListeningPort = Static<typeof ListeningPort>;
 /** In port order. [] while the pylon is not running, and null while its node could not read them. */
 export const Ports = Nullable(Type.Array(ListeningPort));
 
+/** The agents `session open` can start in a pylon, its default first. */
+export const harnesses = ["claude-code", "pi", "shell"] as const;
+
+/** A Herdr pane in the pylon, as its node last reported it. Its harness is one of `harnesses`. */
+const Session = Type.Object({
+	harness: Type.String(),
+	/** The pane, which `session close` takes. */
+	herdrPane: Type.String(),
+	status: Type.String(),
+	harnessSessionId: Nullable(Type.String()),
+	/**
+	 * Its Herdr workspace's label. Null when a probe older than CLI 0.5.0 last observed it, and absent from a control
+	 * plane that old, which means null too.
+	 */
+	title: Type.Optional(Nullable(Type.String())),
+});
+export type Session = Static<typeof Session>;
+
+/** The reply of `session open`: the session it opened, with the title the CLI gave it. */
+export const OpenedSession = Type.Object({ herdrPane: Type.String(), harness: Type.String(), title: Type.String() });
+export type OpenedSession = Static<typeof OpenedSession>;
+
+/** The reply of `session close`, which has nothing to report. */
+export const SessionClosed = Type.Null();
+
 /** The reply of `show`. */
 export const ThreadDetail = Type.Object({
 	thread: Thread,
@@ -86,7 +111,7 @@ export const ThreadDetail = Type.Object({
 		/** Why a retry of the pylon cannot help, or null when it can. */
 		retryRefused: Nullable(Type.String()),
 	}),
-	sessions: Type.Array(Type.Object({ harness: Type.String(), herdrPane: Type.String(), status: Type.String(), harnessSessionId: Nullable(Type.String()) })),
+	sessions: Type.Array(Session),
 	/** Every preview of the thread, served or not, listening or not. */
 	previews: Type.Array(Preview),
 	ports: Ports,

@@ -54,6 +54,7 @@ describe("a streaming answer", () => {
 				emit = onEvent;
 				return new Promise((resolve) => signal.addEventListener("abort", () => resolve()));
 			},
+			attach: async () => {},
 		};
 		const closed = new AbortController();
 		cleanups.push(() => closed.abort());

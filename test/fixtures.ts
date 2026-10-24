@@ -100,5 +100,6 @@ export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 			}
 			if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
 		},
+		async attach() {},
 	};
 }

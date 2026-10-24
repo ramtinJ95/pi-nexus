@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { addProject, createNexus, listProjects, listThreads, showThread } from "../extensions/nexus/cli.ts";
+import { addProject, createNexus, listProjects, listThreads, openSession, showThread } from "../extensions/nexus/cli.ts";
+import { sshHint } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
 import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
@@ -24,6 +25,7 @@ const published = { ...detail, previews: [...detail.previews, own], ports: detai
 
 interface Shown {
 	component: Component;
+	tui: ReturnType<typeof fakeTui>;
 	options: unknown;
 	done(result: unknown): void;
 }
@@ -56,12 +58,12 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 			custom: (factory: (...args: unknown[]) => Component & { dispose?(): void }, options: unknown) =>
 				custom
 					? new Promise((resolve) => {
-							const entry: Shown = { component: undefined as never, options, done: () => {} };
+							const entry: Shown = { component: undefined as never, tui: fakeTui(50, 100), options, done: () => {} };
 							entry.done = (result) => {
 								(entry.component as { dispose?(): void }).dispose?.();
 								resolve(result);
 							};
-							entry.component = factory(fakeTui(50, 100), piTheme(), keybindings(), entry.done);
+							entry.component = factory(entry.tui, piTheme(), keybindings(), entry.done);
 							(entry.component as { focused?: boolean }).focused = true;
 							shown.push(entry);
 						})
@@ -230,6 +232,38 @@ describe("console", () => {
 		await n.until(() => n.text().includes("did not close. /unpublish 8080 tries again"), "the failure");
 		expect(n.text().replace(/\s+/g, " ")).toContain("nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)");
 		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("n opens a Claude Code session with nexus session open, and Enter in Sessions attaches while the TUI is stopped", async () => {
+		const opened = { herdrPane: "%7", harness: "claude-code", title: "claude-code" };
+		const n = load({ ...scenario, responses: { ...scenario.responses, "session open": opened } });
+		void n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
+		n.normal("n", "\r");
+		await n.until(() => n.text().includes('Opened Claude Code "claude-code" in pane %7.'), "the open");
+		expect(n.calls()).toContainEqual(["session", "open", "--json", "--harness=claude-code", "--", idA]);
+		expect(n.text()).toContain("Claude Code  claude-code  ● opened  %7");
+		const tui = n.shown[0]!.tui;
+		n.press("\r");
+		await n.until(() => n.text().includes("Detached from the pylon's sessions."), "the attach to end");
+		expect(n.calls()).toContainEqual(["attach", "--json", idA]);
+		expect(tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with nexus attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
+		n.shown[0]!.done({ kind: "close" });
+	});
+
+	test("/nexus session attach gives the terminal to nexus attach and takes it back, or gives a pi without one the command", async () => {
+		const n = load(scenario);
+		await n.run(`session attach ${idA}`);
+		expect(n.calls()).toContainEqual(["attach", "--json", idA]);
+		expect(n.shown[0]!.tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with nexus attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
+		expect(n.notified).toContainEqual([`Detached from the sessions of ${idA}.`, "info"]);
+		const old = load({ ...scenario, fail: { attach: { exit: 64, kind: "invalid", error: "unknown command attach" } } });
+		await old.run(`session attach ${idA}`);
+		expect(old.shown[0]!.tui.events.at(-2)).toBe("start");
+		expect(old.notified).toContainEqual(["nexus: nexus has no attach command: attaching needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+		const rpc = load(scenario, { custom: false });
+		await rpc.run(`session attach ${idA}`);
+		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  nexus attach ${idA}\n\n${sshHint}` }]);
 	});
 
 	test("/nexus opens on the working thread with the picker under it, so h goes back to the picker and q closes", async () => {
@@ -709,6 +743,17 @@ describe("the contract", () => {
 		const add = { id: "spoon", repoUrl: "--branch=trunk", node: "firebat" };
 		expect(await addProject(createNexus(fake.bin), add)).toMatchObject({ id: "spoon", repoUrl: "--branch=trunk", defaultBranch: "main", defaultNode: "firebat" });
 		expect(fake.calls()).toEqual([["project", "add", "--json", "--node=firebat", "--", "spoon", "--branch=trunk"]]);
+	});
+
+	test("a session's title may be null or absent, from an older probe or control plane, and an opened session needs its title", async () => {
+		const sessions = [
+			{ ...detail.sessions[0]!, title: "review" },
+			{ ...detail.sessions[0]!, title: null },
+			detail.sessions[0]!,
+		];
+		expect((await showThread(nexus({ responses: { show: { ...detail, sessions } } }), idA)).sessions.map((s) => s.title)).toEqual(["review", null, undefined]);
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...detail.sessions[0]!, title: 7 }] } } }), idA)).rejects.toThrow("sessions[0].title");
+		await expect(openSession(nexus({ responses: { "session open": { herdrPane: "%7", harness: "pi" } } }), idA, {})).rejects.toThrow("nexus session open has no title, which pi-nexus needs");
 	});
 
 	test("a detail needs its pylon's retry refusal, which may be null", async () => {

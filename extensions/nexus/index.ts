@@ -1,14 +1,14 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { addProject, createNexus, listProjects, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
+import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
-import { chips, noteParked, summary, type Parked } from "./console/model.ts";
+import { attachCommand, chips, noteParked, sessionName, sshHint, summary, type Parked } from "./console/model.ts";
 import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
 import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
-import type { ThreadRow } from "./contract.ts";
+import { harnesses, type ThreadRow } from "./contract.ts";
 import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
 import { inScope, Scope } from "./scope.ts";
 import { defaultSettingsFile, defaultViewedFile, settingsFile, viewedFile, type SettingsStore, type Viewed } from "./store.ts";
@@ -269,6 +269,26 @@ class NexusSession {
 				this.scope.set(project.id);
 				return ctx.ui.notify(`Added the project ${project.id} (${project.repoUrl}) on ${project.defaultNode}. Nexus shows its threads.`, "info");
 			}
+			case "session-open": {
+				const thread = await id(command.thread);
+				const { name: _name, thread: _thread, ...open } = command;
+				ctx.ui.notify(`Opening ${sessionName(open.harness ?? harnesses[0], open.title)} in ${thread}. Its agent can take a minute to start.`, "info");
+				const session = await openSession(nexus, thread, open, signal);
+				return ctx.ui.notify(`Opened ${sessionName(session.harness, session.title)} in pane ${session.herdrPane} of ${thread}. /nexus session attach ${thread} attaches to it.`, "info");
+			}
+			case "session-close": {
+				const thread = await id(command.thread);
+				const pane = command.pane ?? (await this.askSession(thread, ctx));
+				if (pane === undefined) return;
+				await closeSession(nexus, thread, pane, signal);
+				return ctx.ui.notify(`Closed pane ${pane} of ${thread}.`, "info");
+			}
+			case "attach": {
+				const thread = await id(command.thread);
+				if (await this.console.attach(ctx.ui, thread)) return ctx.ui.notify(`Detached from the sessions of ${thread}.`, "info");
+				// Without a terminal to give, as in RPC mode, the person runs the command in one.
+				return this.note({ title: `attach to ${thread}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${attachCommand(thread)}\n\n${sshHint}` });
+			}
 			case "unpublish": {
 				const thread = await id(command.thread);
 				await unpreviewPort(nexus, thread, command.port, signal);
@@ -286,6 +306,22 @@ class NexusSession {
 				ctx.ui.notify(`${actions[command.name].done} ${thread}.`, "info");
 			}
 		}
+	}
+
+	/** The pane of the session the person picks to close, or undefined when they keep them all. */
+	private async askSession(thread: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
+		const { sessions } = await showThread(this.nexus, thread, this.closed.signal);
+		if (sessions.length === 0) {
+			ctx.ui.notify(`${thread} has no sessions.`, "info");
+			return undefined;
+		}
+		if (!ctx.hasUI) throw new NexusError("invalid", `session close asks which session without a pane, which needs an interactive pi. /nexus session close ${thread} <pane> closes one`);
+		const labels = sessions.map((s) => `${sessionName(s.harness, s.title)} in pane ${s.herdrPane}, ${s.status}`);
+		// Keep comes first, so the highlighted answer and a dismissed dialog both keep the sessions.
+		const answer = await ctx.ui.select(`Close which session of ${thread}? Its agent ends.`, ["Keep them all", ...labels]);
+		const pane = sessions[labels.indexOf(answer ?? "")]?.herdrPane;
+		if (pane === undefined) ctx.ui.notify(`Kept the sessions of ${thread}.`, "info");
+		return pane;
 	}
 
 	shutdown(): void {

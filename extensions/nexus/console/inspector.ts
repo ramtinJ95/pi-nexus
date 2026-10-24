@@ -1,12 +1,32 @@
 /**
- * The thread view's Details and Ports, as the dashboard's inspector: the pylon, its outputs and sessions under
- * Details, and under Ports the previews as links and the ports that listen with no preview. Each port shows once:
- * under Previews while it has one, under Ports otherwise.
+ * The thread view's Details, Ports and Sessions, as the dashboard's inspector: the pylon and its outputs under
+ * Details, under Ports the previews as links and the ports that listen with no preview, and under Sessions the
+ * pylon's Herdr sessions with their titles. Each port shows once: under Previews while it has one, under Ports
+ * otherwise.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { NodeSummary, ThreadDetail } from "../contract.ts";
-import { ago, badge, desiredTone, harnessLabel, linkedPort, noChange, portRows, previewLook, sessionTone, shownOutputs, toneColor, unreachableHint, type PortChange, type Tone } from "./model.ts";
+import type { NodeSummary, Session, ThreadDetail } from "../contract.ts";
+import {
+	ago,
+	attachCommand,
+	badge,
+	desiredTone,
+	harnessLabel,
+	linkedPort,
+	noChange,
+	portRows,
+	previewLook,
+	sessionName,
+	sessionTone,
+	shownOutputs,
+	sshHint,
+	toneColor,
+	unreachableHint,
+	type PortChange,
+	type SessionChanges,
+	type Tone,
+} from "./model.ts";
 
 type Color = "error" | "dim" | "muted";
 
@@ -55,15 +75,52 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	if (outputs.length === 0) lines.push(`   ${t.fg("dim", "No outputs yet.")}`);
 	for (const o of outputs) lines.push(`   ${t.fg("muted", o.kind.padEnd(8))} ${o.ref}`);
 
-	w.heading("Sessions", detail.sessions.length);
-	if (detail.sessions.length === 0) lines.push(`   ${t.fg("dim", "No sessions.")}`);
-	for (const s of detail.sessions) {
-		const id = s.harnessSessionId ? t.fg("dim", `  session ${s.harnessSessionId}`) : "";
-		lines.push(`   ${(harnessLabel[s.harness] ?? s.harness).padEnd(12)} ${state(s.status, sessionTone[s.status] ?? "muted")}  ${t.fg("dim", s.herdrPane)}${id}`);
-	}
 	w.heading("Attach from a shell in the pylon");
 	lines.push(`   ${t.fg("mdCode", detail.attach)}`);
 	return w.done();
+}
+
+/**
+ * The sessions, one row each in `sessions`' order, the `selected` one marked and named in the hints, then the opens
+ * under way and how to attach from this Mac. `rows` holds each row's first and last line, as portLines does.
+ */
+export function sessionLines(
+	theme: Theme,
+	detail: ThreadDetail | undefined,
+	/** The sessions with what the person confirmed since the details were read. */
+	sessions: readonly Session[],
+	changes: SessionChanges,
+	selected: number,
+	width: number,
+): { lines: string[]; rows: [first: number, last: number][] } {
+	if (detail === undefined) return { lines: loading(theme), rows: [] };
+	const w = writer(theme, width);
+	const { t, lines } = w;
+	const rows: [number, number][] = [];
+	const mark = (i: number) => (i === selected ? ` ${t.fg("accent", "→")} ` : "   ");
+
+	w.heading("Sessions", sessions.length);
+	if (sessions.length === 0 && changes.opening.length === 0) lines.push(`   ${t.fg("dim", "No sessions. n opens one: Claude Code, pi or a shell.")}`);
+	for (const [i, s] of sessions.entries()) {
+		const first = lines.length;
+		const closing = changes.closing.has(s.herdrPane);
+		const [status, tone]: [string, Tone] = closing ? ["closing...", "busy"] : [s.status, sessionTone[s.status] ?? "muted"];
+		const title = s.title ? `${t.bold(s.title)}  ` : "";
+		const id = s.harnessSessionId ? t.fg("dim", `  session ${s.harnessSessionId}`) : "";
+		lines.push(`${mark(i)}${(harnessLabel[s.harness] ?? s.harness).padEnd(12)} ${title}${w.dot(tone)} ${status}  ${t.fg("dim", s.herdrPane)}${id}`);
+		if (i === selected && !closing) lines.push(`     ${t.fg("dim", "enter or /attach attaches this terminal, x closes the session")}`);
+		rows[i] = [first, lines.length - 1];
+	}
+	for (const o of changes.opening) {
+		lines.push(`   ${w.dot("busy")} ${t.fg("muted", `Opening ${sessionName(o.harness, o.title)}...`)}`);
+		w.wrapped("Waking the pylon if it is paused, then starting the agent, which can take a minute.", "dim", 5);
+	}
+
+	w.heading("Attach from this Mac");
+	lines.push(`   ${t.fg("mdCode", attachCommand(detail.thread.id))}`);
+	w.wrapped("enter runs it here, and y copies it. Each session is a workspace in the pylon's Herdr: pick one there, and detach from Herdr to come back.", "dim");
+	w.wrapped(sshHint, "dim");
+	return { lines: w.done(), rows };
 }
 
 /**
