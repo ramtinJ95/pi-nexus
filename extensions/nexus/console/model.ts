@@ -34,8 +34,10 @@ export const desiredTone: Readonly<Record<DesiredPhase, Tone>> = { running: "ok"
 export const sessionTone: Readonly<Record<string, Tone>> = { working: "work", idle: "idle", blocked: "bad", done: "ok", unknown: "muted" };
 export const harnessLabel: Readonly<Record<string, string>> = { "claude-code": "Claude Code", pi: "pi", shell: "Shell" };
 
-/** The command that attaches a terminal on this Mac to the thread's pylon. */
-export const attachCommand = (thread: string) => `nexus attach ${thread}`;
+/** The command that attaches a terminal on this Mac to the thread's pylon, through the CLI `cli` names, as a shell takes it. */
+export const attachCommand = (cli: string, thread: string) => `${shellQuote(cli)} attach ${shellQuote(thread)}`;
+/** `word` as one word to a POSIX shell or zsh: bare when nothing in it is special, else single-quoted. */
+export const shellQuote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
 /** How to reach a pylon's node when ssh cannot as it is, which the CLI's own failure repeats. */
 export const sshHint = `Attaching needs Nexus CLI 0.5.0 and ssh to the pylon's node. When ssh needs another user or an alias for the node, set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json, or NEXUS_ATTACH, as the CLI's docs/cli.md describes.`;
 

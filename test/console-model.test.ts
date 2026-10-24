@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ago,
 	argumentsDiff,
+	attachCommand,
 	blocks,
 	clock,
 	composerOf,
@@ -12,6 +13,7 @@ import {
 	pickerRows,
 	previewLook,
 	runOf,
+	shellQuote,
 	shownResult,
 	startArgs,
 	startHint,
@@ -249,5 +251,15 @@ describe("the project scope", () => {
 		expect(scope.project).toBeNull();
 		expect(said).toEqual(["The project fresh no longer exists, so Nexus shows every project again."]);
 		expect(settings.writes).toEqual([{ project: "fresh" }, { project: null }]);
+	});
+});
+
+describe("the attach command", () => {
+	test("names the configured CLI and the thread as a shell takes them", () => {
+		expect(attachCommand("nexus", "th-0123456789ab")).toBe("nexus attach th-0123456789ab");
+		expect(attachCommand("/opt/nexus/bin/nexus", "th-0123456789ab")).toBe("/opt/nexus/bin/nexus attach th-0123456789ab");
+		expect(attachCommand("/Users/me/my tools/nexus", "th-0123456789ab")).toBe("'/Users/me/my tools/nexus' attach th-0123456789ab");
+		expect(shellQuote("it's $HOME")).toBe(`'it'\\''s $HOME'`);
+		expect(shellQuote("")).toBe("''");
 	});
 });

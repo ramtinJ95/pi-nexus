@@ -1,6 +1,6 @@
 {
   "name": "@ramtinj95/pi-nexus",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Drive Nexus threads from Pi through the nexus CLI",
   "type": "module",
   "license": "MIT",

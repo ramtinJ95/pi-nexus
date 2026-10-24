@@ -49,6 +49,7 @@ describe("a streaming answer", () => {
 		const frames = recordDraws();
 		let emit!: (event: WatchEvent) => void;
 		const nexus: Nexus = {
+			bin: "nexus",
 			run: async (args) => (args[0] === "show" ? detail : args[0] === "nodes" ? [] : null),
 			watch(_thread, onEvent, signal) {
 				emit = onEvent;

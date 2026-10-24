@@ -37,6 +37,7 @@ function open(
 		shown = detail as ThreadDetail | null,
 		session = { herdrPane: "%7", harness: "claude-code", title: "claude-code" } as OpenedSession | Error,
 		attachFails = undefined as Error | undefined,
+		cli = "nexus",
 	} = {},
 ) {
 	const sent: { text: string; steer: boolean; requestId: string }[] = [];
@@ -61,6 +62,7 @@ function open(
 		keybindings: keybindings(),
 		display: display(),
 		thread: idA,
+		cli,
 		now: () => clock,
 		done: (end) => ends.push(end),
 		actions: {
@@ -533,6 +535,15 @@ describe("thread view", () => {
 		const none = open(undefined, { shown: { ...detail, sessions: [] } });
 		none.normal("4");
 		expect(none.text()).toContain("No sessions. n opens one: Claude Code, pi or a shell.");
+	});
+
+	test("Sessions shows and y copies the attach command through the configured CLI, quoted for a shell", async () => {
+		const s = open(undefined, { shown: withSessions, cli: "/opt/nexus tools/nexus" });
+		s.normal("4");
+		expect(s.text()).toContain("Attach from this Mac\n   '/opt/nexus tools/nexus' attach th-0123456789ab\n");
+		s.press("y");
+		await s.settle();
+		expect(s.copied).toEqual(["'/opt/nexus tools/nexus' attach th-0123456789ab"]);
 	});
 
 	test("n opens the session form on Claude Code, ←→ choose the harness, and Enter opens it, opening, then opened", async () => {

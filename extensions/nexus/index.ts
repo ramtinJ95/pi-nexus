@@ -287,7 +287,7 @@ class NexusSession {
 				const thread = await id(command.thread);
 				if (await this.console.attach(ctx.ui, thread)) return ctx.ui.notify(`Detached from the sessions of ${thread}.`, "info");
 				// Without a terminal to give, as in RPC mode, the person runs the command in one.
-				return this.note({ title: `attach to ${thread}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${attachCommand(thread)}\n\n${sshHint}` });
+				return this.note({ title: `attach to ${thread}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${attachCommand(this.nexus.bin, thread)}\n\n${sshHint}` });
 			}
 			case "unpublish": {
 				const thread = await id(command.thread);

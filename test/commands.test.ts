@@ -48,6 +48,37 @@ describe("/nexus arguments", () => {
 		expect(parseCommand('send th-01 say "hi" now')).toEqual({ name: "send", thread: "th-01", text: 'say "hi" now' });
 	});
 
+	test("quotes work anywhere in a word, and a backslash escapes, as in a shell", () => {
+		expect(parseCommand('session open 0123 --title="two words"')).toEqual({ name: "session-open", thread: "0123", title: "two words" });
+		expect(parseCommand('session open 0123 --title="login"')).toEqual({ name: "session-open", thread: "0123", title: "login" });
+		expect(parseCommand(`session open 0123 --title=a"b c"'d e'`)).toEqual({ name: "session-open", thread: "0123", title: "ab cd e" });
+		expect(parseCommand('new acme --title="Flaky test" fix it')).toEqual({ name: "new", project: "acme", title: "Flaky test", message: "fix it" });
+		expect(parseCommand('project add spoon git@github.com:o/spoon.git --node=firebat --branch="trunk"')).toEqual({
+			name: "add-project",
+			id: "spoon",
+			repoUrl: "git@github.com:o/spoon.git",
+			node: "firebat",
+			branch: "trunk",
+		});
+		expect(parseCommand("session open 0123 --title two\\ words")).toEqual({ name: "session-open", thread: "0123", title: "two words" });
+		expect(parseCommand("session open 0123 --title it\\'s")).toEqual({ name: "session-open", thread: "0123", title: "it's" });
+		// In double quotes only \" and \\ escape; in single quotes nothing does.
+		expect(parseCommand('session open 0123 --title "say \\"hi\\" \\\\ \\n"')).toEqual({ name: "session-open", thread: "0123", title: 'say "hi" \\ \\n' });
+		expect(parseCommand("session open 0123 --title 'a\\b'")).toEqual({ name: "session-open", thread: "0123", title: "a\\b" });
+	});
+
+	test("a quote left open is refused, except in a message, which is kept as typed", () => {
+		expect(invalid('session open 0123 --title "two words')).toStartWith("session has a quote it does not close\n/nexus");
+		expect(invalid("project add spoon 'git@github.com:o/spoon.git --node firebat")).toStartWith("project has a quote it does not close\n/nexus");
+		expect(invalid('new acme --title "Flaky fix it')).toStartWith("new has a quote it does not close\n/nexus");
+		expect(invalid('"open 0123')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid('"new')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid('new"')).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(invalid("send' th-01 hi")).toStartWith("/nexus has a quote it does not close\n/nexus");
+		expect(parseCommand("send th-01 don't stop")).toEqual({ name: "send", thread: "th-01", text: "don't stop" });
+		expect(parseCommand("new acme --title \"it's\" don't stop")).toEqual({ name: "new", project: "acme", title: "it's", message: "don't stop" });
+	});
+
 	test("thread commands take one thread", () => {
 		expect(parseCommand("show 0123")).toEqual({ name: "show", thread: "0123" });
 		expect(parseCommand("follow 0123")).toEqual({ name: "follow", thread: "0123" });

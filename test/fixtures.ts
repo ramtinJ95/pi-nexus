@@ -91,6 +91,7 @@ export function fakeNexus(scenario: Scenario) {
  */
 export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 	return {
+		bin: "nexus",
 		async run(args) {
 			return args[0] === "threads" ? threads : null;
 		},

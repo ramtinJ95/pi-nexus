@@ -16,7 +16,7 @@ pi install npm:@ramtinj95/pi-nexus
 
 Run `/reload` or restart Pi after installation. Pi packages execute with full system access, so review extensions before installing them.
 
-The extension runs `nexus` from `PATH`. Set `NEXUS_BIN` to run another binary.
+The extension runs `nexus` from `PATH`. Set `NEXUS_BIN` to run another binary, which the attach command it shows and copies names too.
 
 ## The console
 
@@ -88,6 +88,8 @@ Leaving a view never aborts the agent. Opening a thread counts as a visit, as on
 | `/nexus session close <thread> [pane]` | Closes a session's pane, which ends its agent. Without a pane it asks which session, with Keep them all first |
 | `/nexus session attach <thread>` | Gives this terminal to `nexus attach` until you detach from Herdr. A pi without a terminal to give, as in RPC mode, gets the command to run in one |
 | `/nexus help` | Lists these commands |
+
+Arguments split as a shell splits them: quotes work anywhere in a word, so `--title="two words"` is one title, a backslash outside single quotes escapes the next character, and a quote left open is refused. A message, the text after `send <thread>` or `new <project>`, is kept as typed, apostrophes and all.
 
 A thread is its ID, such as `th-0123456789ab`, or any unique prefix of it, with or without `th-`. Tab completes command names, the thread IDs last listed, after `project`, `all`, `add` and the projects those threads are on, and after `session`, `open`, `close` and `attach`.
 
