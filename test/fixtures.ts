@@ -2,34 +2,50 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import type { Nexus } from "../extensions/nexus/cli.ts";
-import type { RenderedEntry, Thread, ThreadState, WatchEvent } from "../extensions/nexus/thread.ts";
+import type { RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "../extensions/nexus/contract.ts";
 
 export const idA = "th-0123456789ab";
 export const idB = "th-0123456789cd";
 export const idC = "th-ffff00001111";
 
 export function thread(id: string, extra: Partial<Thread> = {}): Thread {
-	return { id, title: `title of ${id}`, project: "acme", status: "active", agentTurnRunning: false, createdAt: 0, ...extra };
+	return {
+		id,
+		title: `title of ${id}`,
+		project: "acme",
+		status: "active",
+		agentTurnRunning: false,
+		createdAt: 0,
+		lastAgentActivityAt: 0,
+		lastHumanActivityAt: 0,
+		conversationId: `conv-${id}`,
+		...extra,
+	};
 }
 
-export const threads = [thread(idA, { agentTurnRunning: true }), thread(idB), thread(idC, { status: "archived" })];
+/** A thread as a row of `nexus threads`, with its pylon running unless `extra` says otherwise. */
+export function row(id: string, extra: Partial<ThreadRow> = {}): ThreadRow {
+	return { ...thread(id), desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
+}
+
+export const threads = [row(idA, { agentTurnRunning: true }), row(idB), row(idC, { status: "archived" })];
 
 export const head: RenderedEntry = { entry: { id: 0 }, text: "" };
-export const user = (id: number, text: string): RenderedEntry => ({ entry: { id, model: [{ role: "user", content: text }] }, text: `> ${text}` });
+export const user = (id: number, text: string): RenderedEntry => ({ entry: { id, model: [{ role: "user", content: text, timestamp: 0 }] }, text: `> ${text}` });
 export const assistant = (id: number, text: string, stopReason = "stop"): RenderedEntry => ({
-	entry: { id, model: [{ role: "assistant", content: [{ type: "text", text }], stopReason }] },
+	entry: { id, model: [{ role: "assistant", content: [{ type: "text", text }], stopReason, model: "demo-model" }] },
 	text,
 });
 export const toolResult = (id: number): RenderedEntry => ({
-	entry: { id, model: [{ role: "toolResult", content: [{ type: "text", text: "ok" }] }] },
+	entry: { id, model: [{ role: "toolResult", toolCallId: `call-${id - 1}`, toolName: "bash", content: [{ type: "text", text: "ok" }], isError: false }] },
 	text: "[result] bash: ok",
 });
 export const toolCall = (id: number): RenderedEntry => ({
-	entry: { id, model: [{ role: "assistant", content: [{ type: "toolCall", name: "bash" }], stopReason: "toolUse" }] },
+	entry: { id, model: [{ role: "assistant", content: [{ type: "toolCall", id: `call-${id}`, name: "bash", arguments: {} }], stopReason: "toolUse", model: "demo-model" }] },
 	text: "[tool] bash {}",
 });
 
-export const idle: ThreadState = { status: "active", run: "idle", parkedTasks: 0, queued: 0, pylon: "running", failed: null };
+export const idle: ThreadState = { status: "active", run: "idle", parkedTasks: 0, queued: 0, pylon: "running", failed: null, ports: [] };
 export const working: ThreadState = { ...idle, run: "working" };
 
 export const reset = (thread: string, entries: RenderedEntry[]): WatchEvent => ({ type: "reset", thread, entries });
@@ -42,6 +58,8 @@ export interface Scenario {
 	watch?: { event: WatchEvent | string; delayMs?: number }[];
 	watchHold?: boolean;
 	watchExitDelayMs?: number;
+	/** How long a command takes to answer, by command. */
+	delayMs?: Record<string, number>;
 }
 
 const fakeSource = path.join(import.meta.dir, "fake-nexus.mjs");

@@ -35,5 +35,7 @@ if (command === "watch") {
 	const parent = process.ppid;
 	if (scenario.watchHold) setInterval(() => process.ppid !== parent && process.exit(0), 200);
 } else {
+	const delay = scenario.delayMs?.[command];
+	if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 	process.stdout.write(`${JSON.stringify(scenario.responses?.[command] ?? null, null, 2)}\n`);
 }

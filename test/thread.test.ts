@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { emptyView, isSettled, latestReply, reduce, type RenderedEntry, type ThreadState, type WatchEvent } from "../extensions/nexus/thread.ts";
-import { assistant, idA, idle, reset, state, toolCall, toolResult, user, working } from "./fixtures.ts";
+import type { RenderedEntry, ThreadState, WatchEvent } from "../extensions/nexus/contract.ts";
+import { emptyView, isSettled, latestReply, reduce } from "../extensions/nexus/thread.ts";
+import { assistant, entry, idA, idle, reset, state, toolCall, toolResult, user, working } from "./fixtures.ts";
 
 const view = (events: WatchEvent[]) => events.reduce(reduce, emptyView);
 const aborted = (id: number): RenderedEntry => ({
-	entry: { id, model: [{ role: "assistant", content: [], stopReason: "aborted" }] },
+	entry: { id, model: [{ role: "assistant", content: [], stopReason: "aborted", model: "demo-model" }] },
 	text: "[aborted]",
+});
+
+describe("the partial answer", () => {
+	const streaming: WatchEvent = { type: "live", thread: idA, queued: ["next"], tools: [], partial: "Fixed i", retry: null };
+
+	test("goes once its answer's entry lands, before the live event that drops it", () => {
+		expect(view([reset(idA, []), streaming, entry(idA, assistant(1, "Fixed it."))]).live).toEqual({ queued: ["next"], tools: [], partial: null, retry: null });
+	});
+
+	test("stays through an entry that is not an answer", () => {
+		expect(view([reset(idA, []), streaming, entry(idA, user(1, "also this"))]).live?.partial).toBe("Fixed i");
+	});
 });
 
 describe("settling", () => {
@@ -51,7 +64,7 @@ describe("the reply", () => {
 
 	test("the text parts of one message count separately", () => {
 		const twoParts: RenderedEntry = {
-			entry: { id: 2, model: [{ role: "assistant", content: [{ type: "text", text: "One." }, { type: "text", text: "Two." }], stopReason: "stop" }] },
+			entry: { id: 2, model: [{ role: "assistant", content: [{ type: "text", text: "One." }, { type: "text", text: "Two." }], stopReason: "stop", model: "demo-model" }] },
 			text: "One.\nTwo.",
 		};
 		expect(latestReply([user(1, "go"), twoParts])).toBe("One.\n\nTwo.");

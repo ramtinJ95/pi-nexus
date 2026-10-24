@@ -1,10 +1,11 @@
 /**
- * What pi-nexus knows of a Nexus thread, as the nexus CLI reports it in docs/cli.md of the nexus repo. Only the
- * fields this extension reads are declared; the contract says a consumer ignores the rest. The settle rule, the
- * trims and the thread matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
+ * What pi-nexus makes of a Nexus thread, from the shapes in contract.ts. The settle rule, the trims and the thread
+ * matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
  */
+import type { LiveRun, Part, RenderedEntry, Thread, ThreadState, WatchEvent } from "./contract.ts";
 
-export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid";
+/** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
+export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
 
 /** A failed nexus command, with the kind the CLI reported. */
 export class NexusError extends Error {
@@ -13,45 +14,6 @@ export class NexusError extends Error {
 		this.name = "NexusError";
 	}
 }
-
-export type ThreadStatus = "active" | "idle" | "archived" | "deleted";
-
-export interface Thread {
-	id: string;
-	title: string;
-	project: string;
-	status: ThreadStatus;
-	agentTurnRunning: boolean;
-	createdAt: number;
-	lastAgentActivityAt?: number;
-	lastHumanActivityAt?: number;
-}
-
-export interface ThreadState {
-	status: ThreadStatus;
-	run: "idle" | "working" | "parked";
-	parkedTasks: number;
-	queued: number;
-	pylon: string;
-	failed: string | null;
-}
-
-interface Message {
-	role: string;
-	content?: unknown;
-	stopReason?: string;
-}
-
-export interface RenderedEntry {
-	entry: { id: number; model?: readonly Message[] };
-	text: string;
-}
-
-export type WatchEvent =
-	| { type: "reset"; thread: string; entries: RenderedEntry[] }
-	| ({ type: "entry"; thread: string } & RenderedEntry)
-	| ({ type: "state"; thread: string } & ThreadState)
-	| { type: "error"; thread: string; kind: "unreachable" | "failed"; message: string };
 
 /** A thread as one watch has seen it so far. */
 export interface ThreadView {
@@ -62,6 +24,7 @@ export interface ThreadView {
 	outage?: string;
 	/** Whether any state this watch reported had the run working. */
 	sawWorking?: boolean;
+	live?: LiveRun;
 }
 
 export const emptyView: ThreadView = { entries: [] };
@@ -73,11 +36,25 @@ export function reduce(view: ThreadView, event: WatchEvent): ThreadView {
 	switch (event.type) {
 		case "reset":
 			return { ...view, entries: event.entries };
-		case "entry":
-			return { ...view, entries: [...view.entries, { entry: event.entry, text: event.text }] };
+		case "entry": {
+			const entries = [...view.entries, { entry: event.entry, text: event.text }];
+			// The CLI prints an answer's entry just before the live event that drops it from the partial answer. The
+			// partial is that answer, so it goes now, and a draw between the two lines shows the answer once.
+			const answered = view.live?.partial != null && event.entry.model?.some((m) => m.role === "assistant");
+			return { ...view, entries, ...(answered ? { live: { ...view.live!, partial: null } } : {}) };
+		}
 		case "state": {
 			const { type: _type, thread: _thread, ...state } = event;
-			return { entries: view.entries, state, sawWorking: view.sawWorking === true || state.run === "working" };
+			return {
+				entries: view.entries,
+				state,
+				sawWorking: view.sawWorking === true || state.run === "working",
+				...(view.live ? { live: view.live } : {}),
+			};
+		}
+		case "live": {
+			const { type: _type, thread: _thread, ...live } = event;
+			return { ...view, live };
 		}
 		case "error":
 			return {
@@ -87,13 +64,8 @@ export function reduce(view: ThreadView, event: WatchEvent): ThreadView {
 	}
 }
 
-type Part = { type?: string; text?: string };
-const contentText = (content: unknown) =>
-	typeof content === "string"
-		? content
-		: Array.isArray(content)
-			? (content as Part[]).map((p) => (p.type === "text" ? (p.text ?? "") : p.type === "image" ? "[image]" : "")).join("")
-			: "";
+export const contentText = (content: string | readonly Part[]) =>
+	typeof content === "string" ? content : content.map((p) => (p.type === "text" ? p.text : p.type === "image" ? "[image]" : "")).join("");
 
 type Row = { kind: "user" | "assistant" | "tool" | "notice"; text?: string };
 
@@ -111,10 +83,9 @@ function rows(entries: readonly RenderedEntry[]): Row[] {
 					return text ? [{ kind: "user", text }] : [];
 				}
 				case "assistant": {
-					const parts = Array.isArray(message.content) ? (message.content as (Part & { type?: string })[]) : [];
 					return [
-						...parts.flatMap((part): Row[] =>
-							part.type === "text" && part.text?.trim() ? [{ kind: "assistant", text: part.text.trim() }] : part.type === "toolCall" ? [{ kind: "tool" }] : [],
+						...message.content.flatMap((part): Row[] =>
+							part.type === "text" && part.text.trim() ? [{ kind: "assistant", text: part.text.trim() }] : part.type === "toolCall" ? [{ kind: "tool" }] : [],
 						),
 						...(message.stopReason === "error" || message.stopReason === "aborted" ? [{ kind: "notice" as const }] : []),
 					];
@@ -183,7 +154,7 @@ export function threadRows(threads: readonly Thread[]): string {
 export const workingCount = (threads: readonly Thread[]) =>
 	threads.filter((t) => t.agentTurnRunning && t.status !== "deleted").length;
 
-export const lastActivityAt = (t: Thread) => Math.max(t.lastAgentActivityAt ?? 0, t.lastHumanActivityAt ?? 0, t.createdAt);
+export const lastActivityAt = (t: Thread) => Math.max(t.lastAgentActivityAt, t.lastHumanActivityAt, t.createdAt);
 
 export function ago(ms: number): string {
 	const s = Math.max(0, Math.floor(ms / 1000));

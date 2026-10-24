@@ -14,10 +14,18 @@ function invalid(input: string): string {
 }
 
 describe("/nexus arguments", () => {
-	test("no arguments lists threads", () => {
-		expect(parseCommand("")).toEqual({ name: "list" });
-		expect(parseCommand("  ")).toEqual({ name: "list" });
+	test("no arguments opens the picker, and list lists threads", () => {
+		expect(parseCommand("")).toEqual({ name: "browse" });
+		expect(parseCommand("  ")).toEqual({ name: "browse" });
+		expect(parseCommand("list")).toEqual({ name: "list" });
 		expect(parseCommand("list acme")).toEqual({ name: "list", project: "acme" });
+	});
+
+	test("open takes a thread, and new without a message opens the start form", () => {
+		expect(parseCommand("open 0123")).toEqual({ name: "open", thread: "0123" });
+		expect(parseCommand("new")).toEqual({ name: "start" });
+		expect(parseCommand("new acme")).toEqual({ name: "start", project: "acme" });
+		expect(parseCommand("new acme --title 'Flaky test'")).toEqual({ name: "start", project: "acme", title: "Flaky test" });
 	});
 
 	test("new keeps the message as typed", () => {
@@ -49,8 +57,8 @@ describe("/nexus arguments", () => {
 	});
 
 	test("mistakes name the problem and show usage", () => {
-		expect(invalid("new acme")).toStartWith("new needs a message\n/nexus");
-		expect(invalid("new acme --title")).toStartWith("new needs a title after --title");
+		expect(invalid("new acme --title")).toStartWith("new needs a title after --title\n/nexus");
+		expect(invalid("open")).toStartWith("open needs a thread");
 		expect(invalid("send 0123")).toStartWith("send needs text");
 		expect(invalid("show")).toStartWith("show needs a thread");
 		expect(invalid("archive a b")).toStartWith("archive takes one argument");
