@@ -66,13 +66,15 @@ export const pausedRefusal = (s: Session, thread: ThreadStatus) =>
 export const sessionPlace = (s: Session) => (s.herdrPane === null ? `session ${s.id}` : `pane ${s.herdrPane}`);
 
 /**
- * Whether `a` and `b` are one session: the same harness session, which a wake can bring back in another pane, or the
- * same ID with the same harness and title, since Herdr gives a closed pane's ID to a later session. A title missing
- * from either, as from a control plane older than titles, matches any.
+ * Whether `a` and `b` are one session. Two harness session IDs decide it, since a wake can bring a session back in
+ * another pane, and Herdr gives a closed pane's ID to a later session, which may have the same harness and title.
+ * Without both, it is the same ID with the same harness and title. A title missing from either, as from a control
+ * plane older than titles, matches any.
  */
 export const sameSession = (a: Session, b: Session) =>
-	(a.harnessSessionId !== null && a.harnessSessionId === b.harnessSessionId) ||
-	(a.id === b.id && a.harness === b.harness && (a.title == null || b.title == null || a.title === b.title));
+	a.harnessSessionId !== null && b.harnessSessionId !== null
+		? a.harnessSessionId === b.harnessSessionId
+		: a.id === b.id && a.harness === b.harness && (a.title == null || b.title == null || a.title === b.title);
 
 /** A session just opened, as a row shows it until the node reports it. */
 const openedSession = (session: OpenedSession): Session => ({ ...session, id: session.herdrPane, state: "running", message: null, status: "opened", harnessSessionId: null });

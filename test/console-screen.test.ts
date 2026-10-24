@@ -721,6 +721,18 @@ describe("thread view", () => {
 		expect(s.text()).toMatch(/Shell +scratch  ● unknown  %3/);
 	});
 
+	test("a later session in a closed session's pane with its harness and title, but another harness session, shows at once", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("4", "x", "j", keys.enter);
+		s.release();
+		await s.settle();
+		expect(s.sessionsClosed).toEqual(["%5"]);
+		expect(s.text()).not.toMatch(/login fix/);
+		const later: Session = { ...withSessions.sessions[0]!, harnessSessionId: "sid-9" } as Session;
+		s.details({ ...withSessions, sessions: [later, ...withSessions.sessions.slice(1)] });
+		expect(s.text()).toMatch(/Claude Code  login fix  ● idle  %5  session sid-9/);
+	});
+
 	test("Enter in Sessions, /attach and Attach in the actions attach this terminal, and say how it ended", async () => {
 		const s = open(undefined, { shown: withSessions });
 		s.normal("m");
