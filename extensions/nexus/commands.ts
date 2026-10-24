@@ -1,5 +1,6 @@
 /** The arguments of `/nexus`, parsed into one command. */
-import { NexusError, type Thread } from "./thread.ts";
+import type { Thread } from "./contract.ts";
+import { NexusError } from "./thread.ts";
 
 /** Thread actions that map one to one onto a nexus CLI command. */
 export const actions = {
@@ -13,15 +14,20 @@ export const actions = {
 export type Action = keyof typeof actions;
 
 export type NexusCommand =
+	| { name: "browse" }
+	| { name: "start"; project?: string; title?: string }
 	| { name: "list"; project?: string }
 	| { name: "new"; project: string; title?: string; message: string }
 	| { name: "send"; thread: string; text: string }
-	| { name: "show" | "follow"; thread: string }
+	| { name: "open" | "show" | "follow"; thread: string }
 	| { name: "unfollow"; thread?: string }
 	| { name: Action; thread: string }
 	| { name: "help" };
 
-export const usage = `/nexus [list [project]]             threads, without deleted ones
+export const usage = `/nexus                              the thread picker, with the overview
+/nexus open <thread>                 the thread as a pi session, to read and message it
+/nexus new [project]                 the start form
+/nexus list [project]                threads, without deleted ones
 /nexus new <project> [--title T] <message>
 /nexus send <thread> <text>          queued after the current turn
 /nexus show <thread>                 state and conversation tail
@@ -31,7 +37,7 @@ export const usage = `/nexus [list [project]]             threads, without delet
 /nexus delete <thread>               asks first
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
-const names = ["list", "new", "send", "show", "follow", "unfollow", ...Object.keys(actions), "help"];
+const names = ["open", "list", "new", "send", "show", "follow", "unfollow", ...Object.keys(actions), "help"];
 
 interface Token {
 	value: string;
@@ -64,12 +70,13 @@ export function parseCommand(input: string): NexusCommand {
 	};
 	switch (name) {
 		case undefined:
-			return { name: "list" };
+			return { name: "browse" };
 		case "list":
 			only(1);
 			return args[0] === undefined ? { name } : { name, project: args[0] };
 		case "new": {
-			const project = arg(0, "a project");
+			if (args.length === 0) return { name: "start" };
+			const project = args[0]!;
 			let at = 2;
 			let title: string | undefined;
 			if (args[1] === "--title" || args[1] === "-t") {
@@ -80,7 +87,7 @@ export function parseCommand(input: string): NexusCommand {
 				at = 3;
 			}
 			const first = tokens[at];
-			if (first === undefined) throw invalid("new needs a message");
+			if (first === undefined) return { name: "start", project, ...(title === undefined ? {} : { title }) };
 			return { name, project, ...(title === undefined ? {} : { title }), message: rest(input, first) };
 		}
 		case "send": {
@@ -93,6 +100,7 @@ export function parseCommand(input: string): NexusCommand {
 			return args[0] === undefined ? { name } : { name, thread: args[0] };
 		case "help":
 			return { name };
+		case "open":
 		case "show":
 		case "follow":
 			only(1);
@@ -104,7 +112,7 @@ export function parseCommand(input: string): NexusCommand {
 	}
 }
 
-const takesThread = new Set(["send", "show", "follow", "unfollow", ...Object.keys(actions)]);
+const takesThread = new Set(["open", "send", "show", "follow", "unfollow", ...Object.keys(actions)]);
 
 /** Completes the command name, then a thread ID from the threads last listed. */
 export function complete(prefix: string, threads: readonly Thread[]): { value: string; label: string; description?: string }[] | null {

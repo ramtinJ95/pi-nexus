@@ -73,9 +73,10 @@ describe("pi-nexus in pi", () => {
 		await pi.waitFor(notification(`Stopped following ${idA}: the agent answered`));
 		expect(pi.calls().slice(0, 2)).toEqual([["threads", "--json"], ["send", "--json", idA, "--", "hi there"]]);
 		expect(notes(pi.lines).map((n) => n.body)).toEqual(["> hi", "Hello from the pylon."]);
+		// The widget clears after the notice, so wait for it rather than read it at once.
+		await pi.waitFor((l) => l.method === "setWidget" && l.widgetLines === undefined);
 		const widgets = pi.lines.filter((l) => l.method === "setWidget");
 		expect(widgets[0]!.widgetLines).toEqual([`following ${idA}: connecting`]);
-		expect(widgets.at(-1)!.widgetLines).toBeUndefined();
 	}, 30_000);
 
 	test("/nexus delete asks through pi's select dialog with Keep first", async () => {

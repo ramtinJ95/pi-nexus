@@ -1,10 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createNexus, listThreads, readThread, sendText, startThread, threadId, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
+import { Console, userDisplay } from "./console/index.ts";
+import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
 import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
-import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, workingCount, type Thread, type ThreadView } from "./thread.ts";
+import type { Thread } from "./contract.ts";
+import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, workingCount, type ThreadView } from "./thread.ts";
 
 const statusEveryMs = 30_000;
 
@@ -31,11 +34,15 @@ class NexusSession {
 	private readonly follows = new Map<string, { stop: AbortController; view: ThreadView }>();
 	/** The threads last listed, for completion and titles. */
 	threads: Thread[] = [];
+	private readonly console: Console;
 
 	constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly nexus: Nexus,
-	) {}
+		display: (cwd: string) => Display,
+	) {
+		this.console = new Console(nexus, this.closed.signal, display);
+	}
 
 	attach(ui: ExtensionUIContext): void {
 		if (this.closed.signal.aborted) return;
@@ -106,6 +113,20 @@ class NexusSession {
 		switch (command.name) {
 			case "help":
 				return this.note({ title: "commands", body: usage });
+			case "browse":
+				// Without custom UI, as in RPC mode, the picker is the list it shows.
+				if (await this.console.browse(ctx.ui, ctx.cwd)) return;
+				return this.run({ name: "list" }, ctx);
+			case "open": {
+				const thread = await id(command.thread);
+				if (await this.console.thread(ctx.ui, ctx.cwd, thread)) return;
+				return this.run({ name: "show", thread }, ctx);
+			}
+			case "start": {
+				const { name: _name, ...initial } = command;
+				if (await this.console.start(ctx.ui, ctx.cwd, initial)) return;
+				throw new NexusError("invalid", "the start form needs an interactive pi. /nexus new <project> <message> starts a thread without it");
+			}
 			case "list": {
 				const threads = await listThreads(nexus, command.project ? [`--project=${command.project}`] : [], signal);
 				return this.note({ title: command.project ? `threads of ${command.project}` : "threads", body: threadRows(threads) });
@@ -162,8 +183,9 @@ class NexusSession {
 	}
 }
 
-export default function nexusExtension(pi: ExtensionAPI, nexus: Nexus = createNexus()) {
-	const session = new NexusSession(pi, nexus);
+/** `display` reads pi's display settings, which a test replaces so it never reads the user's own. */
+export default function nexusExtension(pi: ExtensionAPI, nexus: Nexus = createNexus(), display: (cwd: string) => Display = userDisplay) {
+	const session = new NexusSession(pi, nexus, display);
 	pi.registerEntryRenderer(noteType, renderNote);
 	for (const tool of nexusTools(nexus)) {
 		pi.registerTool({

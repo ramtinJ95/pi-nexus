@@ -40,7 +40,7 @@ describe("npm package", () => {
 		}>;
 		const paths = pack[0].files.map((file) => file.path);
 
-		for (const module of ["index", "cli", "commands", "follow", "render", "thread", "tools"]) {
+		for (const module of ["index", "cli", "commands", "contract", "follow", "render", "thread", "tools", "console/index"]) {
 			expect(paths).toContain(`extensions/nexus/${module}.ts`);
 		}
 		for (const prefix of ["test/", ".claude/"]) {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { follow } from "../extensions/nexus/follow.ts";
 import type { Note } from "../extensions/nexus/render.ts";
-import type { WatchEvent } from "../extensions/nexus/thread.ts";
+import type { WatchEvent } from "../extensions/nexus/contract.ts";
 import { assistant, entry, head, idA, idle, reset, scriptedNexus, state, toolCall, toolResult, user, working } from "./fixtures.ts";
 
 function run(polls: WatchEvent[][], nextTurn: boolean, signal = new AbortController().signal) {

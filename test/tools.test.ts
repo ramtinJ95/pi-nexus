@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createNexus } from "../extensions/nexus/cli.ts";
 import { nexusTools } from "../extensions/nexus/tools.ts";
-import { assistant, entry, fakeNexus, head, idA, idB, idle, reset, state, thread, threads, toolCall, toolResult, user, working, type Scenario } from "./fixtures.ts";
+import { assistant, entry, fakeNexus, head, idA, idB, idle, reset, row, state, thread, threads, toolCall, toolResult, user, working, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
@@ -28,12 +28,12 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 
 describe("model tools", () => {
 	test("the model gets no delete or retry", () => {
-		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
+		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
 	});
 
 	test("nexus_threads lists threads of a project", async () => {
 		const now = Date.now();
-		const { call, calls } = setup({ responses: { threads: [thread(idA, { agentTurnRunning: true, createdAt: now - 3_600_000, lastAgentActivityAt: now - 125_000 })] } });
+		const { call, calls } = setup({ responses: { threads: [row(idA, { agentTurnRunning: true, createdAt: now - 3_600_000, lastAgentActivityAt: now - 125_000 })] } });
 		expect(await call("nexus_threads", { project: "acme" })).toEqual([
 			{ id: idA, project: "acme", title: `title of ${idA}`, status: "active", working: true, active: "2m ago" },
 		]);
@@ -69,9 +69,14 @@ describe("model tools", () => {
 		expect(await failure(call("nexus_archive", { thread: " " }))).toBe("nexus (failed): thread is required");
 	});
 
-	test("nexus_read returns the state and the conversation from one watch poll", async () => {
+	test("nexus_read returns the state, its ports and the conversation from one watch poll", async () => {
+		const ports = [
+			{ port: 5173, service: "web", preview: { service: "web", ready: true, url: "https://firebat.example.ts.net:8443/" } },
+			{ port: 8080, service: null, preview: { service: "port-8080", ready: false, url: "https://firebat.example.ts.net:8444/" } },
+			{ port: 9000, service: null, preview: null },
+		];
 		const { call, calls } = setup({
-			watch: [{ event: reset(idA, [head, user(1, "fix the bug"), assistant(2, "Fixed it.")]) }, { event: state(idA, idle) }],
+			watch: [{ event: reset(idA, [head, user(1, "fix the bug"), assistant(2, "Fixed it.")]) }, { event: state(idA, { ...idle, ports }) }],
 			watchHold: true,
 		});
 		expect(await call("nexus_read", { thread: idA })).toEqual({
@@ -80,9 +85,46 @@ describe("model tools", () => {
 			run: "idle",
 			pylon: "running",
 			queued: 0,
+			ports: [
+				{ port: 5173, service: "web", url: "https://firebat.example.ts.net:8443/", ready: true },
+				{ port: 8080, url: "https://firebat.example.ts.net:8444/", ready: false },
+				{ port: 9000 },
+			],
 			conversation: "> fix the bug\n\nFixed it.",
 		});
 		expect(calls()[0]).toEqual(["watch", idA, "--json"]);
+	});
+
+	test("nexus_read says when the ports are unknown", async () => {
+		const { call } = setup({ watch: [{ event: reset(idA, []) }, { event: state(idA, { ...idle, ports: null }) }], watchHold: true });
+		expect(await call("nexus_read", { thread: idA })).toMatchObject({ ports: null });
+	});
+
+	test("nexus_preview publishes the port, waits for it and returns its URL", async () => {
+		const { call, calls } = setup({ responses: { preview: { pylon: "py-1", service: "port-8080", httpsPort: 8444, ready: true, url: "https://firebat.example.ts.net:8444/" } } });
+		expect(await call("nexus_preview", { thread: idA, port: 8080 })).toEqual({ thread: idA, port: 8080, url: "https://firebat.example.ts.net:8444/", ready: true });
+		expect(calls()).toEqual([["preview", "--json", idA, "8080", "--wait"]]);
+	});
+
+	test("nexus_preview fails with the CLI's refusal, and on a preview without its URL", async () => {
+		const refused = setup({ fail: { preview: { exit: 5, kind: "conflict", error: "the pylon is not running" } } });
+		expect(await failure(refused.call("nexus_preview", { thread: idA, port: 8080 }))).toBe("nexus (conflict): the pylon is not running");
+		const old = setup({ responses: { preview: { pylon: "py-1", service: "port-8080", httpsPort: 8444, ready: true } } });
+		expect(await failure(old.call("nexus_preview", { thread: idA, port: 8080 }))).toStartWith("nexus (contract): nexus preview has no url, which pi-nexus needs.");
+	});
+
+	test("nexus_preview says whether a cancel came before the port was published", async () => {
+		const before = setup({ responses: { threads } });
+		const stop = new AbortController();
+		stop.abort();
+		expect(await failure(before.call("nexus_preview", { thread: idA, port: 8080 }, stop.signal))).toBe("nexus: cancelled before the port was published");
+		expect(before.calls()).toEqual([]);
+		const during = setup({ responses: { preview: null }, delayMs: { preview: 5_000 } });
+		const waiting = new AbortController();
+		setTimeout(() => waiting.abort(), 300);
+		expect(await failure(during.call("nexus_preview", { thread: idA, port: 8080 }, waiting.signal))).toBe(
+			"nexus: cancelled while waiting for the preview; the port may be published already",
+		);
 	});
 
 	test("nexus_read keeps the last 6000 characters", async () => {
@@ -114,6 +156,7 @@ describe("model tools", () => {
 			run: "idle",
 			pylon: "running",
 			queued: 0,
+			ports: [],
 			reply: "Fixed it.",
 		});
 		expect(Date.now() - started).toBeLessThan(1000);
@@ -232,6 +275,7 @@ describe("model tools", () => {
 			run: "working",
 			pylon: "running",
 			queued: 0,
+			ports: [],
 			outage: "Nexus is unreachable: proxy down.",
 			reply: null,
 		});

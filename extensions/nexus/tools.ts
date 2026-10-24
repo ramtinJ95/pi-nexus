@@ -5,8 +5,9 @@
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema, type Static } from "typebox";
-import { listThreads, readThread, sendText, startThread, threadId, waitThread, type Nexus } from "./cli.ts";
-import { ago, keepTail, lastActivityAt, latestReply, NexusError, transcript, type ThreadState } from "./thread.ts";
+import { listThreads, previewPort, readThread, sendText, startThread, threadId, waitThread, type Nexus } from "./cli.ts";
+import type { ListeningPort, ThreadState } from "./contract.ts";
+import { ago, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
 
 const readChars = 6_000;
 const replyChars = 4_000;
@@ -27,8 +28,22 @@ const needsHuman = (state: ThreadState | undefined) =>
 			? "The pylon failed. A human must retry it with /nexus retry-pylon."
 			: undefined;
 
+/** A listening port as the model reads it: its service and its preview's URL, when it has them. */
+const portFacts = (port: ListeningPort) => ({
+	port: port.port,
+	...(port.service ? { service: port.service } : {}),
+	...(port.preview ? { url: port.preview.url, ready: port.preview.ready } : {}),
+});
+
 const stateFields = (state: ThreadState | undefined) =>
-	state && { status: state.status, run: state.run, pylon: state.pylon, queued: state.queued, ...(state.failed ? { failed: state.failed } : {}) };
+	state && {
+		status: state.status,
+		run: state.run,
+		pylon: state.pylon,
+		queued: state.queued,
+		...(state.failed ? { failed: state.failed } : {}),
+		ports: state.ports && state.ports.map(portFacts),
+	};
 
 /**
  * A tool whose result is compact JSON. A failure throws, which pi reports to the model as a failed tool call, with
@@ -106,7 +121,8 @@ export function nexusTools(nexus: Nexus) {
 			{
 				name: "nexus_read",
 				label: "Nexus read",
-				description: "A Nexus thread's state (status, run, pylon) and the latest part of its conversation.",
+				description:
+					"A Nexus thread's state (status, run, pylon, listening ports with any preview URL; ports null: unknown) and the latest part of its conversation.",
 				parameters: Type.Object({ thread: threadParam }, { additionalProperties: false }),
 			},
 			async (params, signal) => {
@@ -141,6 +157,26 @@ export function nexusTools(nexus: Nexus) {
 					...(needsHuman(view.state) ? { needs_human: needsHuman(view.state) } : {}),
 					reply: reply ? keepTail(reply, replyChars) : null,
 				};
+			},
+		),
+		jsonTool(
+			{
+				name: "nexus_preview",
+				label: "Nexus preview",
+				description:
+					"Publish a port the thread's pylon listens on as a preview, open to the home tailnet for the thread's life, and return its URL once it is served (up to 2 min).",
+				parameters: Type.Object({ thread: threadParam, port: Type.Integer({ minimum: 1, maximum: 65535 }) }, { additionalProperties: false }),
+			},
+			async (params, signal) => {
+				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
+				if (signal?.aborted) throw new Error("nexus: cancelled before the port was published");
+				try {
+					const preview = await previewPort(nexus, thread, params.port, signal);
+					return { thread, port: params.port, url: preview.url, ready: preview.ready };
+				} catch (err) {
+					if (signal?.aborted) throw new Error("nexus: cancelled while waiting for the preview; the port may be published already");
+					throw err;
+				}
 			},
 		),
 		jsonTool(

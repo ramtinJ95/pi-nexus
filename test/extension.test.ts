@@ -50,8 +50,8 @@ const until = async (check: () => boolean) => {
 };
 
 describe("/nexus", () => {
-	test("registers the six model tools and no delete or pylon retry", () => {
-		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
+	test("registers the seven model tools and no delete or pylon retry", () => {
+		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
 	});
 
 	test("list shows the threads and sets the working count", async () => {

@@ -4,19 +4,9 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import {
-	emptyView,
-	isThreadId,
-	NexusError,
-	isSettled,
-	reduce,
-	resolveThread,
-	type ErrorKind,
-	type Thread,
-	type ThreadState,
-	type ThreadView,
-	type WatchEvent,
-} from "./thread.ts";
+import { Type } from "typebox";
+import { NodeSummary, parse, Preview, Project, Thread, ThreadDetail, ThreadRow, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { emptyView, isThreadId, NexusError, isSettled, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** Runs `nexus <command> --json <args>` and returns what it printed. */
@@ -28,7 +18,6 @@ export interface Nexus {
 export const defaultBin = () => process.env.NEXUS_BIN || "nexus";
 
 const kinds: Readonly<Record<number, ErrorKind>> = { 1: "failed", 2: "unreachable", 3: "refused", 4: "not-found", 5: "conflict", 64: "invalid" };
-const watchTypes = new Set(["reset", "entry", "state", "error"]);
 
 /** The CLI's stderr line `{"error", "kind", "status"}`, or the exit code's kind when stderr holds something else. */
 function failure(code: number | null, stderr: string): NexusError {
@@ -76,14 +65,23 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 				child.stderr.on("data", (chunk) => (stderr += chunk));
 				createInterface({ input: child.stdout }).on("line", (line) => {
 					if (line.trim() === "" || broken || signal.aborted) return;
-					let event: WatchEvent;
+					let printed: unknown;
 					try {
-						event = JSON.parse(line) as WatchEvent;
+						printed = JSON.parse(line);
 					} catch {
 						broken = new NexusError("failed", `nexus watch printed a line that is not JSON: ${line.slice(0, 200)}`);
 						return stop();
 					}
-					if (watchTypes.has(event.type)) onEvent(event);
+					// The contract asks a consumer to skip the event types it does not know.
+					const type = (printed as { type?: unknown } | null)?.type;
+					if (typeof type !== "string" || !Object.hasOwn(watchEvents, type)) return;
+					// A failure here, the contract's or a handler's, ends the watch with it rather than escaping the stream.
+					try {
+						onEvent(parse(watchEvents[type as keyof typeof watchEvents], printed, `a ${type} event of nexus watch`) as WatchEvent);
+					} catch (err) {
+						broken = err instanceof NexusError ? err : new NexusError("failed", `handling a ${type} event of nexus watch failed: ${err instanceof Error ? err.message : String(err)}`);
+						stop();
+					}
 				});
 				signal.addEventListener("abort", stop, { once: true });
 				if (signal.aborted) stop();
@@ -99,19 +97,41 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 	};
 }
 
-export const listThreads = (nexus: Nexus, args: readonly string[] = [], signal?: AbortSignal) =>
-	nexus.run(["threads", ...args], signal) as Promise<Thread[]>;
+export async function listThreads(nexus: Nexus, args: readonly string[] = [], signal?: AbortSignal): Promise<ThreadRow[]> {
+	const rows = parse(Type.Array(Type.Unknown()), await nexus.run(["threads", ...args], signal), "nexus threads");
+	return rows.map((row, i) => {
+		const id = (row as { id?: unknown } | null)?.id;
+		return parse(ThreadRow, row, `nexus threads' row for ${typeof id === "string" ? id : `its item ${i}`}`);
+	});
+}
 
-/** Starts a thread with its first message. `=` keeps a value that starts with a dash from reading as a flag. */
-export const startThread = (nexus: Nexus, start: { project: string; message: string; title?: string }, signal?: AbortSignal) =>
-	nexus.run(
-		["start", `--project=${start.project}`, `--message=${start.message}`, ...(start.title ? [`--title=${start.title}`] : [])],
-		signal,
-	) as Promise<Thread>;
+/** Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title or a message. */
+export async function startThread(
+	nexus: Nexus,
+	start: { project: string; message?: string; title?: string; node?: string; branch?: string },
+	signal?: AbortSignal,
+): Promise<Thread> {
+	const flags = (["message", "title", "node", "branch"] as const).flatMap((key) => (start[key] ? [`--${key}=${start[key]}`] : []));
+	return parse(Thread, await nexus.run(["start", `--project=${start.project}`, ...flags], signal), "nexus start");
+}
 
-/** Sends `text` as it is, after `--` so that no part of it reads as a flag. */
-export const sendText = (nexus: Nexus, thread: string, text: string, steer: boolean, signal?: AbortSignal) =>
-	nexus.run(["send", thread, ...(steer ? ["--steer"] : []), "--", text], signal);
+/**
+ * Sends `text` as it is, after `--` so that no part of it reads as a flag. A retry of a send whose reply was lost
+ * passes the same `requestId`, so the API takes it as the same message.
+ */
+export const sendText = (nexus: Nexus, thread: string, text: string, steer: boolean, signal?: AbortSignal, requestId?: string) =>
+	nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal);
+
+export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
+	parse(ThreadDetail, await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+/**
+ * Publishes `port` of the thread's pylon as a preview and waits, up to the CLI's two minutes, until the node serves
+ * it. An abort ends the wait, but the port may be published by then.
+ */
+export const previewPort = async (nexus: Nexus, thread: string, port: number, signal?: AbortSignal) =>
+	parse(Preview, await nexus.run(["preview", thread, String(port), "--wait"], signal), "nexus preview");
+export const listProjects = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(Project), await nexus.run(["projects"], signal), "nexus projects");
+export const listNodes = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(NodeSummary), await nexus.run(["nodes"], signal), "nexus nodes");
 
 /** A thread ID from an ID or a unique prefix of one. Only a prefix costs a lookup. */
 export async function threadId(nexus: Nexus, ref: string, signal?: AbortSignal): Promise<string> {
