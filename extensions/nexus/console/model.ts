@@ -353,8 +353,52 @@ export function modelOf(entries: readonly RenderedEntry[]): string | undefined {
 export const shownOutputs = (detail: ThreadDetail) =>
 	detail.outputs.filter((o) => o.kind !== "preview" || !detail.previews.some((p) => p.service === o.ref));
 
-/** A port the person opened from the console: publishing it, published with its preview, or why it failed. */
-export type Opening = { phase: "opening" } | { phase: "open"; preview: Preview } | { phase: "failed"; message: string };
+/**
+ * What the person did to a port from this view, as the Claude Code mod keeps it: the publication its last operation
+ * confirmed, with its place in the view's order of events, apart from an operation under way and the last one's failure.
+ */
+export interface PortChange {
+	/** The port's preview, or null once unpublished, and the view's mark when that was confirmed. */
+	confirmed: { preview: Preview | null; at: number } | null;
+	pending: "open" | "close" | null;
+	failure: { action: "open" | "close"; message: string } | null;
+}
+export const noChange: PortChange = { confirmed: null, pending: null, failure: null };
+
+/** The port of a preview that publishes a port on its own, which Nexus names `port-<port>`. Undefined for a service's. */
+export function linkedPort(service: string): number | undefined {
+	const port = /^port-(\d+)$/.exec(service)?.[1];
+	return port === undefined ? undefined : Number(port);
+}
+
+/**
+ * The previews and ports as the details list them, with what the person confirmed since: a port just unpublished has
+ * no preview, and one just published has its own. A confirmation counts until details asked for after it show the
+ * port as it is. `askedAt` and a confirmation's `at` are marks in one sequence, so they never tie.
+ */
+export function shownPorts(
+	detail: Pick<ThreadDetail, "previews" | "ports">,
+	changes: ReadonlyMap<number, PortChange>,
+	askedAt: number,
+): Pick<ThreadDetail, "previews" | "ports"> {
+	const confirmed = (port: number | undefined) => {
+		const known = port === undefined ? null : (changes.get(port)?.confirmed ?? null);
+		return known !== null && known.at > askedAt ? known : null;
+	};
+	const listed = detail.previews.flatMap((p) => {
+		const known = confirmed(linkedPort(p.service));
+		return known === null ? [p] : known.preview === null ? [] : [known.preview];
+	});
+	const published = [...changes.keys()].flatMap((port) => {
+		const preview = confirmed(port)?.preview;
+		return preview && !listed.some((p) => p.service === preview.service) ? [preview] : [];
+	});
+	const ports = detail.ports && detail.ports.map((p) => {
+		const known = confirmed(p.port);
+		return known === null ? p : { ...p, preview: known.preview };
+	});
+	return { previews: [...listed, ...published], ports };
+}
 
 /** The preview reaches only the pylon's 127.0.0.1, so a server bound only to ::1 is neither listed nor reachable. */
 export const unreachableHint = "A server bound only to ::1 can't be previewed, so bind it to 0.0.0.0 or 127.0.0.1.";

@@ -21,6 +21,7 @@ export type NexusCommand =
 	| { name: "send"; thread: string; text: string }
 	| { name: "open" | "show" | "follow"; thread: string }
 	| { name: "unfollow"; thread?: string }
+	| { name: "unpublish"; thread: string; port: number }
 	| { name: Action; thread: string }
 	| { name: "help" };
 
@@ -33,11 +34,12 @@ export const usage = `/nexus                              the thread picker, wit
 /nexus show <thread>                 state and conversation tail
 /nexus follow <thread>               stream entries until the next turn ends
 /nexus unfollow [thread]             stop one follow, or all
+/nexus unpublish <thread> <port>     close a port's preview
 /nexus archive|unarchive|retry|retry-pylon|abort <thread>
 /nexus delete <thread>               asks first
 A thread is its ID or a unique prefix of it, with or without th-.`;
 
-const names = ["open", "list", "new", "send", "show", "follow", "unfollow", ...Object.keys(actions), "help"];
+const names = ["open", "list", "new", "send", "show", "follow", "unfollow", "unpublish", ...Object.keys(actions), "help"];
 
 interface Token {
 	value: string;
@@ -98,6 +100,13 @@ export function parseCommand(input: string): NexusCommand {
 		case "unfollow":
 			only(1);
 			return args[0] === undefined ? { name } : { name, thread: args[0] };
+		case "unpublish": {
+			only(2);
+			const thread = arg(0, "a thread");
+			const port = Number(arg(1, "a port"));
+			if (!Number.isInteger(port) || port < 1 || port > 65535) throw invalid(`unpublish needs a port from 1 to 65535, got ${args[1]}`);
+			return { name, thread, port };
+		}
 		case "help":
 			return { name };
 		case "open":
@@ -112,7 +121,7 @@ export function parseCommand(input: string): NexusCommand {
 	}
 }
 
-const takesThread = new Set(["open", "send", "show", "follow", "unfollow", ...Object.keys(actions)]);
+const takesThread = new Set(["open", "send", "show", "follow", "unfollow", "unpublish", ...Object.keys(actions)]);
 
 /** Completes the command name, then a thread ID from the threads last listed. */
 export function complete(prefix: string, threads: readonly Thread[]): { value: string; label: string; description?: string }[] | null {

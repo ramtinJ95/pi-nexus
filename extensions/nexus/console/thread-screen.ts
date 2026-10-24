@@ -29,6 +29,7 @@ import {
 	composerOf,
 	conversationItems,
 	failedText,
+	linkedPort,
 	modelOf,
 	parkedMessage,
 	pausedText,
@@ -36,7 +37,9 @@ import {
 	shownOutputs,
 	workingMessage,
 	type Composer,
-	type Opening,
+	noChange,
+	shownPorts,
+	type PortChange,
 } from "./model.ts";
 import { Transcript, type Display } from "./transcript.ts";
 
@@ -46,6 +49,10 @@ export interface ScreenActions {
 	act(action: Action): Promise<void>;
 	/** Publishes `port` of the pylon as a preview, and resolves once the node serves it. */
 	preview(port: number): Promise<Preview>;
+	/** Unpublishes the preview of `port`. */
+	unpublish(port: number): Promise<void>;
+	/** Reads the details again, which come back through setDetail. */
+	refresh(): void;
 	/** Puts `text` on the system clipboard. */
 	copy(text: string): Promise<void>;
 }
@@ -63,6 +70,7 @@ export const screenCommands: readonly { name: string; description: string; actio
 	{ name: "unarchive", description: "unarchive the thread", action: "unarchive" },
 	{ name: "delete", description: "delete the thread and its pylon, after asking", action: "delete" },
 	{ name: "open", description: "publish a port of the pylon as a preview and link it" },
+	{ name: "unpublish", description: "close a port's preview, so its link stops answering" },
 	{ name: "copy", description: "copy a preview's link, by its port or its service" },
 	{ name: "info", description: "show or hide the pylon, previews, ports, outputs and sessions" },
 	{ name: "close", description: "close the thread view" },
@@ -141,6 +149,9 @@ export class ThreadScreen implements Component, Focusable {
 	private readonly now: () => number;
 	private view: ThreadView = { entries: [] };
 	private detail: ThreadDetail | undefined;
+	/** The last mark handed out, and the one the shown details were asked for at. */
+	private marks = 0;
+	private askedAt = 0;
 	private nodes: readonly NodeSummary[] | Error | undefined;
 	private body: Component[] = [];
 	private status: { component: RunStatus; kind: "working" | "retry" } | undefined;
@@ -149,8 +160,8 @@ export class ThreadScreen implements Component, Focusable {
 	private outgoing: { text: string; steer: boolean; requestId: string; inFlight: boolean } | undefined;
 	private readonly ticker: ReturnType<typeof setInterval>;
 	inspecting = false;
-	/** The ports opened from this view, by number. */
-	private readonly openings = new Map<number, Opening>();
+	/** What the person did to each port from this view, by number. */
+	private readonly portChanges = new Map<number, PortChange>();
 	/** Whether the transcript sticks to its end, and its first shown line when it does not. */
 	private following = true;
 	private top = 0;
@@ -199,8 +210,18 @@ export class ThreadScreen implements Component, Focusable {
 		this.rebuild();
 	}
 
-	setDetail(detail: ThreadDetail): void {
+	/**
+	 * A point in this view's order of events, later than every one before: details asked for and operations
+	 * confirmed. A sequence rather than a clock, so two events in the same millisecond still have an order.
+	 */
+	mark(): number {
+		return ++this.marks;
+	}
+
+	/** `askedAt` is the mark taken when the details were asked for. */
+	setDetail(detail: ThreadDetail, askedAt: number): void {
 		this.detail = detail;
+		this.askedAt = askedAt;
 		this.updateStatus();
 		this.tui.requestRender();
 	}
@@ -282,6 +303,8 @@ export class ThreadScreen implements Component, Focusable {
 				return this.askDelete();
 			case "open":
 				return this.openPort(argument);
+			case "unpublish":
+				return this.unpublishPort(argument);
 			case "copy":
 				return this.copyLink(argument);
 			default:
@@ -348,33 +371,75 @@ export class ThreadScreen implements Component, Focusable {
 	}
 
 	/**
-	 * Publishes a port as a preview, saying so while the CLI waits for the node to serve it, then links it until the
-	 * next details list it under Previews. A failure says why, and /open tries again.
+	 * Publishes a port as a preview, saying so while the CLI waits for the node to serve it, then shows it under
+	 * Previews until details read after it list it. A failure says why, and /open tries again.
 	 */
 	private async openPort(argument: string): Promise<void> {
-		const port = Number(argument);
-		if (!/^\d+$/.test(argument) || port < 1 || port > 65535) return this.say("/open needs a port number, such as /open 5173.", true);
-		if (this.openings.get(port)?.phase === "opening") return this.say(`Port ${port} is opening already.`);
-		this.openings.set(port, { phase: "opening" });
+		const port = this.portArgument("open", argument);
+		if (port === undefined) return;
 		this.say(`Opening port ${port}: publishing it and waiting for the node to serve its URL...`);
+		const preview = await this.changePort(port, "open", () => this.options.actions.preview(port));
+		if (preview instanceof Error) this.say(`Port ${port} did not open: ${preview.message}`, true);
+		else this.say(`Port ${port} is open at ${preview.url}`);
+	}
+
+	/** Unpublishes a port's preview, saying so while the CLI wakes a paused pylon, and why when it fails. */
+	private async unpublishPort(argument: string): Promise<void> {
+		const port = this.portArgument("unpublish", argument);
+		if (port === undefined) return;
+		this.say(`Unpublishing port ${port}...`);
+		const done = await this.changePort(port, "close", async () => (await this.options.actions.unpublish(port), null));
+		if (done instanceof Error) this.say(`Port ${port} was not unpublished: ${done.message}`, true);
+		else this.say(`Port ${port} is unpublished. /open ${port} publishes it again, maybe at a new URL.`);
+	}
+
+	/**
+	 * Runs `action` on `port` as pending, then keeps the preview it confirmed, null once unpublished, with when it
+	 * ended, or its failure beside what was confirmed before.
+	 */
+	private async changePort<T extends Preview | null>(port: number, action: "open" | "close", run: () => Promise<T>): Promise<T | Error> {
+		const was = this.portChanges.get(port) ?? noChange;
+		this.portChanges.set(port, { ...was, pending: action, failure: null });
 		try {
-			const preview = await this.options.actions.preview(port);
-			this.openings.set(port, { phase: "open", preview });
-			this.say(`Port ${port} is open at ${preview.url}`);
+			const preview = await run();
+			this.portChanges.set(port, { confirmed: { preview, at: this.mark() }, pending: null, failure: null });
+			// Asked for after the confirmation, so details that show the port otherwise, after another client
+			// changed it, are shown.
+			this.options.actions.refresh();
+			return preview;
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.openings.set(port, { phase: "failed", message });
-			this.say(`Port ${port} did not open: ${message}`, true);
+			const error = err instanceof Error ? err : new Error(String(err));
+			this.portChanges.set(port, { ...(this.portChanges.get(port) ?? noChange), pending: null, failure: { action, message: error.message } });
+			return error;
 		}
+	}
+
+	/** The port `/<command>` names, or undefined once it has said why there is none or why it must wait. */
+	private portArgument(command: string, argument: string): number | undefined {
+		const port = Number(argument);
+		if (!/^\d+$/.test(argument) || port < 1 || port > 65535) {
+			this.say(`/${command} needs a port number, such as /${command} 8080.`, true);
+			return undefined;
+		}
+		const pending = this.portChanges.get(port)?.pending;
+		if (pending) {
+			this.say(`Port ${port} is ${pending === "open" ? "opening" : "closing"} already.`);
+			return undefined;
+		}
+		return port;
+	}
+
+	/** The previews and ports as shown: the details with what the person confirmed since they were read. */
+	private shown() {
+		return shownPorts(this.detail ?? { previews: [], ports: null }, this.portChanges, this.askedAt);
 	}
 
 	/** The link of the preview that `ref`, a port or a service, names. */
 	private linkOf(ref: string): string | undefined {
-		const opened = this.openings.get(Number(ref));
+		const shown = this.shown();
 		return (
-			this.detail?.ports?.find((p) => String(p.port) === ref)?.preview?.url ??
-			(opened?.phase === "open" ? opened.preview.url : undefined) ??
-			this.detail?.previews.find((p) => p.service === ref)?.url
+			shown?.ports?.find((p) => String(p.port) === ref)?.preview?.url ??
+			shown?.previews.find((p) => p.service === ref || String(linkedPort(p.service)) === ref)?.url
 		);
 	}
 
@@ -474,8 +539,10 @@ export class ThreadScreen implements Component, Focusable {
 			parts.push(`pylon ${badge(actual)[0]} on ${d.pylon.node}`);
 			if (d.pylon.observedAt !== null) parts.push(`seen ${ago(Date.parse(d.pylon.observedAt), this.now())}`);
 			parts.push(`wanted ${d.desired}`);
-			const outputs = shownOutputs(d).length;
-			parts.push(`${d.previews.length} ${d.previews.length === 1 ? "preview" : "previews"}`, `${outputs} ${outputs === 1 ? "output" : "outputs"}`);
+			const shown = this.shown();
+			const previews = shown.previews.length;
+			const outputs = shownOutputs({ ...d, ...shown }).length;
+			parts.push(`${previews} ${previews === 1 ? "preview" : "previews"}`, `${outputs} ${outputs === 1 ? "output" : "outputs"}`);
 		}
 		const left = parts.join(" · ");
 		const model = modelOf(this.view.entries) ?? "";
@@ -516,7 +583,7 @@ export class ThreadScreen implements Component, Focusable {
 		const height = Math.max(1, rows - bottom.length);
 		this.height = height;
 		const body = this.inspecting
-			? ["", ...inspectorLines(this.theme, this.detail, this.nodes, this.openings, this.now(), width)]
+			? ["", ...inspectorLines(this.theme, this.detail, this.nodes, this.shown(), this.portChanges, this.now(), width)]
 			: this.body.flatMap((c) => c.render(width));
 		const end = Math.max(0, body.length - height);
 		if (this.following || this.top >= end) {

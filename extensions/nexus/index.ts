@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createNexus, listThreads, readThread, sendText, startThread, threadId, type Nexus } from "./cli.ts";
+import { createNexus, listThreads, readThread, sendText, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
 import type { Display } from "./console/transcript.ts";
@@ -159,6 +159,11 @@ class NexusSession {
 				const stopped = command.thread !== undefined && thread === undefined ? 0 : this.stopFollows(thread);
 				if (stopped === 0) ctx.ui.notify("Not following that.", "info");
 				return;
+			}
+			case "unpublish": {
+				const thread = await id(command.thread);
+				await unpreviewPort(nexus, thread, command.port, signal);
+				return ctx.ui.notify(`Unpublished port ${command.port} of ${thread}. Publishing it again may give it a new URL.`, "info");
 			}
 			default: {
 				const thread = await id(command.thread);

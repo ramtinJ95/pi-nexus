@@ -50,8 +50,18 @@ const until = async (check: () => boolean) => {
 };
 
 describe("/nexus", () => {
-	test("registers the seven model tools and no delete or pylon retry", () => {
-		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_wait"]);
+	test("registers the eight model tools and no delete or pylon retry", () => {
+		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
+	});
+
+	test("unpublish runs nexus unpreview and says so, and an older CLI says to update", async () => {
+		const n = load({ responses: { threads, unpreview: null } });
+		await n.run("unpublish 0123456789ab 8080");
+		expect(n.calls()).toContainEqual(["unpreview", "--json", idA, "8080"]);
+		expect(n.notified).toContainEqual([`Unpublished port 8080 of ${idA}. Publishing it again may give it a new URL.`, "info"]);
+		const old = load({ responses: { threads }, fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
+		await old.run(`unpublish ${idA} 8080`);
+		expect(old.notified).toContainEqual(["nexus: nexus has no unpreview command: unpublishing a preview needs Nexus CLI 0.3.0 or later (nexus --version)", "error"]);
 	});
 
 	test("list shows the threads and sets the working count", async () => {

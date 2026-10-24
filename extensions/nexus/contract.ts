@@ -52,6 +52,9 @@ export const Preview = Type.Object({
 });
 export type Preview = Static<typeof Preview>;
 
+/** The reply of `unpreview`, which has nothing to report. */
+export const Unpreviewed = Type.Null();
+
 /** A TCP port that something in the pylon listens on and a preview can reach. */
 const ListeningPort = Type.Object({
 	port: Type.Number(),

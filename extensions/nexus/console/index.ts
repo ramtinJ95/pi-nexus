@@ -4,7 +4,7 @@
  */
 import { copyToClipboard, getMarkdownTheme, SettingsManager, type ExtensionUIContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { listNodes, listProjects, listThreads, previewPort, sendText, showThread, startThread, type Nexus } from "../cli.ts";
+import { listNodes, listProjects, listThreads, previewPort, sendText, showThread, startThread, unpreviewPort, type Nexus } from "../cli.ts";
 import type { Action } from "../commands.ts";
 import { emptyView, NexusError, reduce, type ThreadView } from "../thread.ts";
 import type { NodeSummary } from "../contract.ts";
@@ -205,9 +205,10 @@ export class Console {
 		const begin = inOrder();
 		const refreshDetail = async () => {
 			const current = begin();
+			const askedAt = screen.mark();
 			try {
 				const detail = await showThread(nexus, thread, signal);
-				if (!signal.aborted && current()) screen.setDetail(detail);
+				if (!signal.aborted && current()) screen.setDetail(detail, askedAt);
 			} catch (err) {
 				// The watch reports an outage itself.
 				if (!signal.aborted && current() && !(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) {
@@ -230,12 +231,9 @@ export class Console {
 					await nexus.run([action, thread], signal);
 					void refreshDetail();
 				},
-				async preview(port) {
-					const preview = await previewPort(nexus, thread, port, signal);
-					// The port now has its preview, which the details list under Previews.
-					void refreshDetail();
-					return preview;
-				},
+				preview: (port) => previewPort(nexus, thread, port, signal),
+				unpublish: (port) => unpreviewPort(nexus, thread, port, signal),
+				refresh: () => void refreshDetail(),
 				copy: (text) => copyToClipboard(text),
 			},
 		});

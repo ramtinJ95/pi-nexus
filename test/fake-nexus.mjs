@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // A stand-in for the nexus CLI that answers from the scenario file in FAKE_NEXUS and logs its argv to FAKE_NEXUS_LOG.
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const argv = process.argv.slice(2);
 appendFileSync(process.env.FAKE_NEXUS_LOG, `${JSON.stringify(argv)}\n`);
 const scenario = JSON.parse(readFileSync(process.env.FAKE_NEXUS, "utf8"));
 const command = argv[0];
+// `after` holds replies that replace `responses` once a command has answered, as `show` changes after `unpreview`.
+const answered = `${process.env.FAKE_NEXUS}.answered`;
+const ran = existsSync(answered) ? readFileSync(answered, "utf8").split("\n") : [];
+const responses = Object.assign({}, scenario.responses, ...Object.entries(scenario.after ?? {}).flatMap(([c, r]) => (ran.includes(c) ? [r] : [])));
 
 const fail = scenario.fail?.[command];
 if (fail) {
@@ -37,5 +41,6 @@ if (command === "watch") {
 } else {
 	const delay = scenario.delayMs?.[command];
 	if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-	process.stdout.write(`${JSON.stringify(scenario.responses?.[command] ?? null, null, 2)}\n`);
+	process.stdout.write(`${JSON.stringify(responses[command] ?? null, null, 2)}\n`);
+	appendFileSync(answered, `${command}\n`);
 }

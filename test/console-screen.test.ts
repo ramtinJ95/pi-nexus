@@ -15,15 +15,24 @@ afterEach(() => screens.splice(0).forEach((s) => s.dispose()));
 /** A preview the fake opens, or why it refuses to. */
 type Opened = Preview | Error;
 
-function open(view: ThreadView = { entries, state: working, live }, { rows = 60, sendFails = 0, opened = new Map<number, Opened>(), copyFails = false } = {}) {
+/** Port 8080 published on its own, beside the web service's preview. */
+const own: Preview = { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" };
+const published: ThreadDetail = { ...detail, previews: [webPreview, own], ports: [ports[0]!, { port: 8080, service: null, preview: own }] };
+
+function open(
+	view: ThreadView = { entries, state: working, live },
+	{ rows = 60, sendFails = 0, opened = new Map<number, Opened>(), refused = new Map<number, Error>(), copyFails = false, shown = detail as ThreadDetail | null } = {},
+) {
 	const sent: { text: string; steer: boolean; requestId: string }[] = [];
 	const acted: Action[] = [];
 	const previewed: number[] = [];
+	const unpublished: number[] = [];
 	const copied: string[] = [];
 	// Each preview waits for `release`, as `nexus preview --wait` waits for the node.
 	let release = () => {};
 	const ends: ScreenEnd[] = [];
 	let failures = sendFails;
+	let refreshes = 0;
 	const tui = fakeTui(rows, 100);
 	const screen = new ThreadScreen({
 		tui,
@@ -48,6 +57,15 @@ function open(view: ThreadView = { entries, state: working, live }, { rows = 60,
 				if (result instanceof Error) throw result;
 				return result;
 			},
+			async unpublish(port) {
+				unpublished.push(port);
+				await new Promise<void>((resolve) => (release = resolve));
+				const refusal = refused.get(port);
+				if (refusal) throw refusal;
+			},
+			refresh() {
+				refreshes++;
+			},
 			async copy(text) {
 				if (copyFails) throw new Error("no clipboard");
 				copied.push(text);
@@ -57,7 +75,7 @@ function open(view: ThreadView = { entries, state: working, live }, { rows = 60,
 	screens.push(screen);
 	screen.focused = true;
 	screen.setView(view);
-	screen.setDetail(detail);
+	if (shown !== null) screen.setDetail(shown, screen.mark());
 	const text = () => plain(screen.render(100));
 	const type = async (input: string) => {
 		for (const ch of input) screen.handleInput(ch);
@@ -65,7 +83,9 @@ function open(view: ThreadView = { entries, state: working, live }, { rows = 60,
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	};
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-	return { screen, tui, sent, acted, previewed, copied, ends, text, type, settle, release: () => release(), press: (key: string) => screen.handleInput(key) };
+	/** Details as the console reads them, asked for now or at the earlier mark `askedAt`. */
+	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
+	return { screen, tui, sent, acted, previewed, unpublished, copied, ends, text, type, settle, details, refreshes: () => refreshes, release: () => release(), press: (key: string) => screen.handleInput(key) };
 }
 
 describe("thread view", () => {
@@ -261,7 +281,7 @@ describe("thread view", () => {
 	test("the ports section says why it lists nothing, and names a service's port", () => {
 		const inspect = (d: ThreadDetail) => {
 			const s = open();
-			s.screen.setDetail(d);
+			s.details(d);
 			s.press(keys.altI);
 			// Wide enough that the hint does not wrap.
 			return plain(s.screen.render(160));
@@ -279,8 +299,8 @@ describe("thread view", () => {
 		expect(inspect({ ...detail, previews: [own], ports: [{ port: 3000, service: null, preview: own }] })).toMatch(/● port-3000\n/);
 	});
 
-	test("/open publishes a port, shows it opening, then links it", async () => {
-		const s = open(undefined, { opened: new Map([[8080, { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" }]]) });
+	test("/open publishes a port, shows it opening, then lists it under Previews", async () => {
+		const s = open(undefined, { opened: new Map([[8080, own]]) });
 		s.press(keys.altI);
 		await s.type("/open 8080");
 		expect(s.previewed).toEqual([8080]);
@@ -290,10 +310,11 @@ describe("thread view", () => {
 		expect(s.text()).toContain("Port 8080 is opening already.");
 		s.release();
 		await s.settle();
-		expect(s.text()).toContain("● 8080  https://firebat.example.ts.net:8445/");
+		expect(s.text()).toMatch(/Previews 2\n.*\n.*\n +● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +\/unpublish 8080 closes it\n/);
+		expect(s.text()).toMatch(/Ports 0\n/);
 		expect(s.text()).toContain("Port 8080 is open at https://firebat.example.ts.net:8445/");
 		await s.type("/copy 8080");
-		expect(s.copied).toEqual(["https://firebat.example.ts.net:8445/"]);
+		expect(s.copied).toEqual([own.url]);
 	});
 
 	test("/open says why a port did not open, and tries again", async () => {
@@ -305,15 +326,119 @@ describe("thread view", () => {
 		await s.settle();
 		// The port's row says why, as well as the note above the editor.
 		expect(s.text()).toMatch(/● 8080 {2}did not open\. \/open 8080 tries again\n {3}nexus: the pylon is not running \(exit 5\)\n/);
-		opened.set(8080, { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" });
+		opened.set(8080, own);
 		await s.type("/open 8080");
 		s.release();
 		await s.settle();
 		expect(s.previewed).toEqual([8080, 8080]);
-		expect(s.text()).toContain("● 8080  https://firebat.example.ts.net:8445/");
+		expect(s.text()).toMatch(/● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n/);
+		expect(s.text()).not.toContain("did not open");
 		await s.type("/open http");
-		expect(s.text()).toContain("/open needs a port number, such as /open 5173.");
+		expect(s.text()).toContain("/open needs a port number, such as /open 8080.");
 		expect(s.previewed).toHaveLength(2);
+	});
+
+	test("/unpublish shows the preview closing, then the port back under Ports before the details are read again", async () => {
+		const s = open(undefined, { shown: published });
+		s.press(keys.altI);
+		expect(s.text()).toMatch(/● port-8080\n +https:\/\/firebat\.example\.ts\.net:8445\/\n +\/unpublish 8080 closes it\n/);
+		await s.type("/unpublish 8080");
+		expect(s.unpublished).toEqual([8080]);
+		expect(s.text()).toMatch(/● port-8080 closing\.\.\.\n.*\n +Unpublishing it\. A paused pylon wakes first, which can take a while\./);
+		await s.type("/unpublish 8080");
+		await s.type("/open 8080");
+		expect(s.unpublished).toEqual([8080]);
+		expect(s.previewed).toEqual([]);
+		expect(s.text()).toContain("Port 8080 is closing already.");
+		s.release();
+		await s.settle();
+		expect(s.text()).not.toContain("port-8080");
+		expect(s.text()).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
+		expect(s.text()).toContain("Port 8080 is unpublished. /open 8080 publishes it again, maybe at a new URL.");
+		expect(s.text()).toMatch(/· 1 preview ·/);
+	});
+
+	test("an unpublished port stays under Ports until details asked for after it, whatever an older read or a failed /open says", async () => {
+		const s = open(undefined, { shown: published, opened: new Map([[8080, new Error("nexus: the pylon is not running (exit 5)")]]) });
+		s.press(keys.altI);
+		const before = s.screen.mark();
+		await s.type("/unpublish 8080");
+		s.release();
+		await s.settle();
+		// Details asked for before the unpublish ended still list the preview.
+		s.details(published, before);
+		expect(s.text()).not.toContain("port-8080");
+		await s.type("/copy 8080");
+		expect(s.text()).toContain("No preview has the port or service 8080.");
+		await s.type("/open 8080");
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/Ports 1\n +● 8080 {2}did not open\. \/open 8080 tries again\n {3}nexus: the pylon is not running \(exit 5\)\n/);
+		expect(s.text()).not.toContain(own.url);
+		// Details asked for after it show the port as it is, published again by someone else.
+		s.details(published);
+		expect(s.text()).toMatch(/● port-8080\n/);
+	});
+
+	test("a port opened here and unpublished elsewhere before the next details shows under Ports, and /copy forgets it", async () => {
+		const s = open(undefined, { opened: new Map([[8080, own]]) });
+		s.press(keys.altI);
+		await s.type("/open 8080");
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/● port-8080\n/);
+		s.details(detail);
+		expect(s.text()).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one\n\n/);
+		expect(s.text()).not.toContain("port-8080");
+		await s.type("/copy 8080");
+		expect(s.copied).toEqual([]);
+		expect(s.text()).toContain("No preview has the port or service 8080.");
+	});
+
+	test("a port opened before the first details have loaded can be copied", async () => {
+		const s = open(undefined, { shown: null, opened: new Map([[8080, own]]) });
+		await s.type("/open 8080");
+		s.release();
+		await s.settle();
+		await s.type("/copy 8080");
+		expect(s.copied).toEqual([own.url]);
+	});
+
+	test("/unpublish says why a preview did not close, and only a port's own preview offers it", async () => {
+		const refusal = "nexus: port 5173 is previewed by the service web, which keeps its preview";
+		const refused = new Map([[5173, new Error(refusal)], [8080, new Error("nexus: the node firebat is unreachable")]]);
+		const s = open(undefined, { shown: published, refused });
+		s.press(keys.altI);
+		expect(s.text()).not.toContain("/unpublish 5173");
+		await s.type("/unpublish 8080");
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/● port-8080\n.*\n +did not close\. \/unpublish 8080 tries again\n {5}nexus: the node firebat is unreachable\n/);
+		await s.type("/unpublish 5173");
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/● web  port 5173\n.*\n {5}did not close\.\n {5}nexus: port 5173 is previewed by the service web/);
+		await s.type("/unpublish 0");
+		expect(s.text()).toContain("/unpublish needs a port number, such as /unpublish 8080.");
+		expect(s.unpublished).toEqual([8080, 5173]);
+		const archived = open(undefined, { shown: { ...published, thread: { ...published.thread, status: "archived" } } });
+		archived.press(keys.altI);
+		expect(archived.text()).toContain("● port-8080 paused");
+		expect(archived.text()).not.toContain("/unpublish");
+	});
+
+	test("a preview whose /open is still waiting offers no /unpublish", async () => {
+		const starting = { ...own, ready: false };
+		const s = open(undefined, { opened: new Map([[8080, own]]) });
+		s.press(keys.altI);
+		await s.type("/open 8080");
+		// The details list the preview, still starting, while the CLI waits for the node.
+		s.details({ ...detail, previews: [webPreview, starting], ports: [ports[0]!, { port: 8080, service: null, preview: starting }] });
+		expect(s.text()).toMatch(/● port-8080 starting\n/);
+		expect(s.text()).not.toContain("/unpublish 8080");
+		s.release();
+		await s.settle();
+		expect(s.text()).toContain("/unpublish 8080 closes it");
 	});
 
 	test("/copy copies a preview's link by its port or its service, and says when it cannot", async () => {
