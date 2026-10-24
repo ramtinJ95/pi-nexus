@@ -64,6 +64,8 @@ export interface Scenario {
 	delayMs?: Record<string, number>;
 	/** The signal that stops `attach`, as Ctrl+C stops the CLI. */
 	attachSignal?: string;
+	/** What `nexus --version` prints after `nexus `, 0.8.0 unless given. */
+	version?: string;
 }
 
 const fakeSource = path.join(import.meta.dir, "fake-nexus.mjs");
@@ -104,5 +106,8 @@ export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 			if (!signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
 		},
 		async attach() {},
+		async version() {
+			return "nexus 0.8.0\n";
+		},
 	};
 }

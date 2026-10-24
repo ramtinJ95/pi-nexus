@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { createNexus, type Nexus } from "../extensions/nexus/cli.ts";
+import { createNexus, isOlder, parseVersion, type Nexus } from "../extensions/nexus/cli.ts";
 import { detail, memoryStores } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, idB, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
@@ -130,6 +130,35 @@ describe("/nexus", () => {
 		const gone = load({ responses: { threads }, fail: { "session close": { exit: 4, kind: "not-found", error: moved } } });
 		await gone.run(`session close ${idA} w1:p1`);
 		expect(gone.notified.at(-1)).toEqual([`nexus: ${moved}`, "error"]);
+	});
+
+	test("session close needs CLI 0.8.0, refused before it runs on an older one, and a new enough version is read once", async () => {
+		const old = load({ responses: { threads, "session close": null }, version: "0.7.0" });
+		await old.run(`session close ${idA} w1:p1`);
+		expect(old.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(old.notified.at(-1)![0]).toEndWith(" is 0.7.0: closing a session needs Nexus CLI 0.8.0 or later (nexus --version)");
+		// Each refusal reads the version again, so a CLI updated meanwhile is not refused from memory.
+		await old.run(`session close ${idA} w1:p1`);
+		expect(old.calls().filter((c) => c[0] === "--version")).toHaveLength(2);
+		const unreadable = load({ responses: { threads }, version: "dev" });
+		await unreadable.run(`session close ${idA} w1:p1`);
+		expect(unreadable.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(unreadable.notified.at(-1)![0]).toContain('--version printed no version ("nexus dev"): closing a session needs Nexus CLI 0.8.0 or later');
+		const current = load({ responses: { threads, "session close": null }, version: "0.8.0" });
+		await current.run(`session close ${idA} %3`);
+		await current.run(`session close ${idA} %4`);
+		expect(current.calls().filter((c) => c[0] === "--version")).toHaveLength(1);
+		expect(current.calls().filter((c) => c[0] === "session")).toHaveLength(2);
+	});
+
+	test("nexus --version reads as numbers, and an older version compares before a newer one", () => {
+		expect(parseVersion("nexus 0.8.0\n")).toEqual([0, 8, 0]);
+		expect(parseVersion("nexus 0.10.2")).toEqual([0, 10, 2]);
+		expect(parseVersion("usage: nexus")).toBeNull();
+		expect(isOlder([0, 7, 9], [0, 8, 0])).toBe(true);
+		expect(isOlder([0, 10, 0], [0, 8, 0])).toBe(false);
+		expect(isOlder([0, 8, 0], [0, 8, 0])).toBe(false);
+		expect(isOlder([1, 0, 0], [0, 8, 0])).toBe(false);
 	});
 
 	test("a port being published or unpublished refuses a second change from any entry point, without queueing it", async () => {
@@ -301,6 +330,7 @@ describe("the status poll", () => {
 				}),
 			watch: async () => {},
 			attach: async () => {},
+			version: async () => "nexus 0.8.0\n",
 		};
 		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
 		let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
