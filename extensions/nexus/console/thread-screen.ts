@@ -23,7 +23,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { Action } from "../commands.ts";
-import type { NodeSummary, OpenedSession, Preview, ThreadDetail } from "../contract.ts";
+import type { NodeSummary, OpenedSession, Preview, Session, ThreadDetail } from "../contract.ts";
 import { portBusy, type ThreadView } from "../thread.ts";
 import { detailLines, portLines, sessionLines } from "./inspector.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
@@ -49,13 +49,19 @@ import {
 	noChange,
 	shownPorts,
 	type PortChange,
+	confirmClosed,
 	noSessionChanges,
+	pausedRefusal,
 	sessionName,
+	sessionPlace,
 	settleSessions,
 	shownSessions,
 } from "./model.ts";
 import { SessionForm } from "./session-form.ts";
 import { Transcript, type Display } from "./transcript.ts";
+
+/** `text` as a sentence starts it. */
+const opening = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
 
 export interface ScreenActions {
 	/** `requestId` is the same for a retry of the same text, so the API takes both as one message. */
@@ -67,8 +73,8 @@ export interface ScreenActions {
 	unpublish(port: number): Promise<void>;
 	/** Opens a session in the pylon, and resolves once its agent is ready or waits for its human. */
 	openSession(harness: string, title: string | undefined): Promise<OpenedSession>;
-	/** Closes a session's pane, which ends its agent. */
-	closeSession(pane: string): Promise<void>;
+	/** Closes a session by its ID: a pane, which ends its agent, or a failed session, which no wake then tries again. */
+	closeSession(id: string): Promise<void>;
 	/** Gives the terminal to `nexus attach` until the person detaches from Herdr, then takes it back. */
 	attach(): Promise<void>;
 	/** Reads the details again, which come back through setDetail. */
@@ -709,33 +715,39 @@ export class ThreadScreen implements Component, Focusable {
 	}
 
 	/** Keep comes first, so the highlighted answer and Esc both keep the session. */
-	private askClose(pane: string, name: string): void {
+	private askClose(session: Session): void {
 		const kept = () => this.say("Kept the session.");
+		const name = sessionName(session.harness, session.title);
 		this.openMenu(
-			`Close ${name} in pane ${pane}? Its agent ends.`,
+			session.state === "failed"
+				? `Close ${name}, which the last wake did not bring back? No wake tries it again.`
+				: `Close ${name} in ${sessionPlace(session)}? Its agent ends.`,
 			[
 				{ value: "keep", label: "Keep" },
 				{ value: "close", label: "Close" },
 			],
-			(value) => (value === "close" ? void this.closeSession(pane) : kept()),
+			(value) => (value === "close" ? void this.closeSession(session) : kept()),
 			kept,
 		);
 	}
 
-	private async closeSession(pane: string): Promise<void> {
+	/** Closes the session by its ID, and says why in the CLI's words when it does not close. It never tries again. */
+	private async closeSession(session: Session): Promise<void> {
 		const changes = this.sessionChanges;
-		changes.closing.add(pane);
-		this.say(`Closing pane ${pane}...`);
+		const place = sessionPlace(session);
+		changes.closing.add(session.id);
+		this.say(`Closing ${place}...`);
 		try {
-			await this.options.actions.closeSession(pane);
-			changes.closed.set(pane, this.now());
-			changes.opened = changes.opened.filter((o) => o.session.herdrPane !== pane);
+			await this.options.actions.closeSession(session.id);
+			confirmClosed(changes, session, this.now());
 			this.options.actions.refresh();
-			this.say(`Closed pane ${pane}.`);
+			this.say(`Closed ${place}.`);
 		} catch (err) {
-			this.say(`Pane ${pane} was not closed: ${err instanceof Error ? err.message : String(err)}`, true);
+			this.say(`${opening(place)} was not closed: ${err instanceof Error ? err.message : String(err)}`, true);
+			// The sessions may have changed under it, such as a wake that moved it to another pane.
+			this.options.actions.refresh();
 		} finally {
-			changes.closing.delete(pane);
+			changes.closing.delete(session.id);
 			this.tui.requestRender();
 		}
 	}
@@ -964,8 +976,11 @@ export class ThreadScreen implements Component, Focusable {
 	private closeSelected(): void {
 		const session = this.sessions()[this.selected.sessions];
 		if (session === undefined) return this.say("No session to close. n opens one.");
-		if (this.sessionChanges.closing.has(session.herdrPane)) return this.say(`Pane ${session.herdrPane} is already closing.`);
-		this.askClose(session.herdrPane, sessionName(session.harness, session.title));
+		// The control plane refuses it too, so it is never asked.
+		if (session.state === "paused") return this.say(pausedRefusal(session, this.detail?.thread.status ?? "idle"));
+		const place = sessionPlace(session);
+		if (this.sessionChanges.closing.has(session.id)) return this.say(`${opening(place)} is already closing.`);
+		this.askClose(session);
 	}
 
 	/** Enter or x on a port row: publishes a port with no preview, or unpublishes a port's own preview. */

@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { NodeSummary, OpenedSession, parse, parseDetail, Preview, Project, SessionClosed, Thread, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -159,7 +159,7 @@ export const sendText = (nexus: Nexus, thread: string, text: string, steer: bool
 	nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal);
 
 export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
-	parse(ThreadDetail, await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+	parseDetail(await nexus.run(["show", thread], signal), `nexus show ${thread}`);
 /** The `thread:port` pairs a publish or unpublish runs on, for each Nexus the session drives. */
 const portsChanging = new WeakMap<Nexus, Set<string>>();
 
@@ -231,10 +231,15 @@ export async function openSession(nexus: Nexus, thread: string, open: { harness?
 	}
 }
 
-/** Closes a session's pane, which ends its agent, and needs CLI 0.5.0. A pane already closed succeeds. */
-export async function closeSession(nexus: Nexus, thread: string, pane: string, signal?: AbortSignal): Promise<void> {
+/**
+ * Closes a session by its `id`, which needs CLI 0.5.0. Closing a pane ends its agent, and closing a failed session
+ * drops it, so no wake tries it again. A control plane from CLI 0.8.0 refuses a paused session and fails on a pane
+ * that is not open, which a wake may have moved; the failure says why in its words. CLI 0.8.0 passes the refusal on at
+ * once, where an older CLI asks again for two minutes first.
+ */
+export async function closeSession(nexus: Nexus, thread: string, id: string, signal?: AbortSignal): Promise<void> {
 	try {
-		parse(SessionClosed, await nexus.run(["session close", "--", thread, pane], signal), "nexus session close");
+		parse(SessionClosed, await nexus.run(["session close", "--", thread, id], signal), "nexus session close");
 	} catch (err) {
 		throw newer(err, "session close", "closing a session", "0.5.0");
 	}

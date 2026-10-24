@@ -823,6 +823,23 @@ describe("the contract", () => {
 		await expect(openSession(nexus({ responses: { "session open": { herdrPane: "%7", harness: "pi" } } }), idA, {})).rejects.toThrow("nexus session open has no title, which pi-nexus needs");
 	});
 
+	test("a session reads as running, paused or failed, and one from a control plane older than session states reads as running in its pane", async () => {
+		const { id: _id, state: _state, message: _message, ...legacy } = detail.sessions[0]!;
+		const paused = { pylon: "pylon-th1", id: "w1:p1", herdrPane: "w1:p1", harness: "claude-code", harnessSessionId: "bd2c2d6b", title: "review", status: "working", state: "paused", message: null };
+		const failed = { pylon: "pylon-th1", id: "failed-0123456789ab", herdrPane: null, harness: "pi", harnessSessionId: "/home/user/.pi/agent/sessions/s.jsonl", title: "plan", status: "unknown", state: "failed", message: "herdr agent start: the agent did not start." };
+		const shown = await showThread(nexus({ responses: { show: { ...detail, sessions: [legacy, paused, failed] } } }), idA);
+		expect(shown.sessions.map((s) => [s.state, s.id, s.herdrPane, s.message])).toEqual([
+			["running", "%3", "%3", null],
+			["paused", "w1:p1", "w1:p1", null],
+			["failed", "failed-0123456789ab", null, "herdr agent start: the agent did not start."],
+		]);
+		// Each state's own shape is checked, and a state the contract does not know is refused.
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...failed, message: null }] } } }), idA)).rejects.toThrow("sessions[0].message");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...paused, herdrPane: null, state: "running" }] } } }), idA)).rejects.toThrow("sessions[0].herdrPane");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...paused, state: "sleeping" }] } } }), idA)).rejects.toThrow("sessions[0].state is none of the values the contract allows");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...legacy, herdrPane: undefined }] } } }), idA)).rejects.toThrow("sessions[0]");
+	});
+
 	test("a detail needs its pylon's retry refusal, which may be null", async () => {
 		const { retryRefused: _, ...bare } = detail.pylon;
 		await expect(showThread(nexus({ responses: { show: { ...detail, pylon: bare } } }), idA)).rejects.toThrow(`nexus show ${idA} has no pylon.retryRefused`);

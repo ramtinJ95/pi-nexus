@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
-import { attachCommand, chips, noteParked, sessionName, sshHint, summary, type Parked } from "./console/model.ts";
+import { attachCommand, chips, noteParked, pausedRefusal, sessionLook, sessionName, sessionPlace, sshHint, summary, type Parked } from "./console/model.ts";
 import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
@@ -279,10 +279,10 @@ class NexusSession {
 			}
 			case "session-close": {
 				const thread = await id(command.thread);
-				const pane = command.pane ?? (await this.askSession(thread, ctx));
-				if (pane === undefined) return;
-				await closeSession(nexus, thread, pane, signal);
-				return ctx.ui.notify(`Closed pane ${pane} of ${thread}.`, "info");
+				const session = command.session ?? (await this.askSession(thread, ctx));
+				if (session === undefined) return;
+				await closeSession(nexus, thread, session, signal);
+				return ctx.ui.notify(`Closed session ${session} of ${thread}.`, "info");
 			}
 			case "attach": {
 				const thread = await id(command.thread);
@@ -309,20 +309,32 @@ class NexusSession {
 		}
 	}
 
-	/** The pane of the session the person picks to close, or undefined when they keep them all. */
+	/**
+	 * The ID of the session the person picks to close, or undefined when they keep them all. A paused session is not
+	 * offered, since it can be closed only once its pylon's wake brings it back.
+	 */
 	private async askSession(thread: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
-		const { sessions } = await showThread(this.nexus, thread, this.closed.signal);
+		const { thread: t, sessions } = await showThread(this.nexus, thread, this.closed.signal);
+		const closable = sessions.filter((s) => s.state !== "paused");
 		if (sessions.length === 0) {
 			ctx.ui.notify(`${thread} has no sessions.`, "info");
 			return undefined;
 		}
-		if (!ctx.hasUI) throw new NexusError("invalid", `session close asks which session without a pane, which needs an interactive pi. /nexus session close ${thread} <pane> closes one`);
-		const labels = sessions.map((s) => `${sessionName(s.harness, s.title)} in pane ${s.herdrPane}, ${s.status}`);
+		if (closable.length === 0) {
+			ctx.ui.notify(`${thread} has no session to close: ${sessions.map((s) => pausedRefusal(s, t.status)).join(" ")}`, "info");
+			return undefined;
+		}
+		if (!ctx.hasUI) throw new NexusError("invalid", `session close asks which session without an ID, which needs an interactive pi. /nexus session close ${thread} <id> closes one`);
+		const labels = closable.map((s) => {
+			const [state] = sessionLook(s, t.status);
+			const why = s.state === "failed" ? `: ${s.message.split("\n")[0]}` : "";
+			return `${sessionName(s.harness, s.title)} in ${sessionPlace(s)}, ${state}${why}`;
+		});
 		// Keep comes first, so the highlighted answer and a dismissed dialog both keep the sessions.
-		const answer = await ctx.ui.select(`Close which session of ${thread}? Its agent ends.`, ["Keep them all", ...labels]);
-		const pane = sessions[labels.indexOf(answer ?? "")]?.herdrPane;
-		if (pane === undefined) ctx.ui.notify(`Kept the sessions of ${thread}.`, "info");
-		return pane;
+		const answer = await ctx.ui.select(`Close which session of ${thread}? A running one's agent ends.`, ["Keep them all", ...labels]);
+		const id = closable[labels.indexOf(answer ?? "")]?.id;
+		if (id === undefined) ctx.ui.notify(`Kept the sessions of ${thread}.`, "info");
+		return id;
 	}
 
 	shutdown(): void {

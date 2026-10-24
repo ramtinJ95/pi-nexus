@@ -4,7 +4,7 @@
  * folds, the same run bar and the same reasons a thread takes no messages.
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ToolCallPart, ToolResultMessage } from "../contract.ts";
+import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
 import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
 import type { Seen } from "../store.ts";
 
@@ -45,6 +45,38 @@ export const sshHint = `Attaching needs Nexus CLI 0.5.0 and ssh to the pylon's n
 export const sessionName = (harness: string, title: string | null | undefined) =>
 	`${harnessLabel[harness] ?? harness}${title ? ` "${title}"` : ""}`;
 
+/** When a paused session comes back: with the pylon's next wake, or an archived thread's unarchive. */
+const resumesOn = (thread: ThreadStatus) => (thread === "archived" ? "unarchive" : "wake");
+
+/**
+ * A session's state as its row reads it: a running one by Herdr's status, a paused one by when it comes back, and a
+ * failed one as failed, its message apart.
+ */
+export function sessionLook(s: Session, thread: ThreadStatus): [label: string, tone: Tone] {
+	if (s.state === "paused") return [`paused, resumes on ${resumesOn(thread)}`, "idle"];
+	if (s.state === "failed") return ["failed", "bad"];
+	return [s.status, sessionTone[s.status] ?? "muted"];
+}
+
+/** Why a paused session cannot be closed yet, as the control plane refuses it. */
+export const pausedRefusal = (s: Session, thread: ThreadStatus) =>
+	`${sessionName(s.harness, s.title)} is paused with the pylon and resumes on ${resumesOn(thread)}. Close it once it runs.`;
+
+/** Where a session is, as a sentence names it: its pane, or its ID when it has none. */
+export const sessionPlace = (s: Session) => (s.herdrPane === null ? `session ${s.id}` : `pane ${s.herdrPane}`);
+
+/**
+ * Whether `a` and `b` are one session: the same harness session, which a wake can bring back in another pane, or the
+ * same ID with the same harness and title, since Herdr gives a closed pane's ID to a later session. A title missing
+ * from either, as from a control plane older than titles, matches any.
+ */
+export const sameSession = (a: Session, b: Session) =>
+	(a.harnessSessionId !== null && a.harnessSessionId === b.harnessSessionId) ||
+	(a.id === b.id && a.harness === b.harness && (a.title == null || b.title == null || a.title === b.title));
+
+/** A session just opened, as a row shows it until the node reports it. */
+const openedSession = (session: OpenedSession): Session => ({ ...session, id: session.herdrPane, state: "running", message: null, status: "opened", harnessSessionId: null });
+
 /**
  * How long an open or close confirmed in the thread view outweighs details that do not show it. The node reads its
  * sessions again once the CLI has answered, so the next details can still show them as they were.
@@ -52,34 +84,38 @@ export const sessionName = (harness: string, title: string | null | undefined) =
 export const sessionSettleMs = 30_000;
 
 /**
- * What the person did to the thread's sessions from the thread view: the opens and closes under way, and those
- * confirmed that the details have not shown yet, each with when it was confirmed.
+ * What the person did to the thread's sessions from the thread view: the opens and closes under way, the closes by
+ * session ID, and those confirmed that the details have not shown yet, each with when it was confirmed.
  */
 export interface SessionChanges {
 	opening: { harness: string; title: string | undefined }[];
 	opened: { session: OpenedSession; at: number }[];
 	closing: Set<string>;
-	closed: Map<string, number>;
+	closed: { session: Session; at: number }[];
 }
-export const noSessionChanges = (): SessionChanges => ({ opening: [], opened: [], closing: new Set(), closed: new Map() });
+export const noSessionChanges = (): SessionChanges => ({ opening: [], opened: [], closing: new Set(), closed: [] });
+
+/** Records a close the CLI confirmed. A session just opened and now closed is forgotten, whatever the details say next. */
+export function confirmClosed(changes: SessionChanges, session: Session, now: number): void {
+	changes.closed.push({ session, at: now });
+	changes.opened = changes.opened.filter((o) => !sameSession(openedSession(o.session), session));
+}
 
 /** Forgets the confirmations that `sessions`, just read, show, or that have waited `sessionSettleMs` for it. */
 export function settleSessions(changes: SessionChanges, sessions: readonly Session[], now: number): void {
-	const listed = (pane: string) => sessions.some((s) => s.herdrPane === pane);
-	changes.opened = changes.opened.filter(({ session, at }) => !listed(session.herdrPane) && now - at < sessionSettleMs);
-	for (const [pane, at] of changes.closed) if (!listed(pane) || now - at >= sessionSettleMs) changes.closed.delete(pane);
+	const listed = (session: Session) => sessions.some((s) => sameSession(s, session));
+	changes.opened = changes.opened.filter(({ session, at }) => !listed(openedSession(session)) && now - at < sessionSettleMs);
+	changes.closed = changes.closed.filter(({ session, at }) => listed(session) && now - at < sessionSettleMs);
 }
 
 /**
- * The sessions as the details list them, with the confirmations they do not show yet: a pane just closed is gone,
+ * The sessions as the details list them, with the confirmations they do not show yet: a session just closed is gone,
  * and a session just opened is there, `opened` until the node reports it.
  */
 export function shownSessions(sessions: readonly Session[], changes: SessionChanges): Session[] {
-	const listed = sessions.filter((s) => !changes.closed.has(s.herdrPane));
-	const opened = changes.opened
-		.filter(({ session }) => !changes.closed.has(session.herdrPane) && !sessions.some((s) => s.herdrPane === session.herdrPane))
-		.map(({ session }): Session => ({ ...session, status: "opened", harnessSessionId: null }));
-	return [...listed, ...opened];
+	const closed = (session: Session) => changes.closed.some((c) => sameSession(session, c.session));
+	const opened = changes.opened.map(({ session }) => openedSession(session)).filter((o) => !closed(o) && !sessions.some((s) => sameSession(s, o)));
+	return [...sessions.filter((s) => !closed(s)), ...opened];
 }
 
 /**

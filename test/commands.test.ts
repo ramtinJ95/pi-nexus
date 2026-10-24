@@ -131,7 +131,7 @@ describe("/nexus arguments", () => {
 		expect(parseCommand('session open 0123 --harness pi --title "log in"')).toEqual({ name: "session-open", thread: "0123", harness: "pi", title: "log in" });
 		expect(parseCommand("session open --title=-review --harness=shell 0123")).toEqual({ name: "session-open", thread: "0123", harness: "shell", title: "-review" });
 		expect(parseCommand("session close 0123")).toEqual({ name: "session-close", thread: "0123" });
-		expect(parseCommand("session close 0123 %3")).toEqual({ name: "session-close", thread: "0123", pane: "%3" });
+		expect(parseCommand("session close 0123 %3")).toEqual({ name: "session-close", thread: "0123", session: "%3" });
 		expect(parseCommand("session attach 0123")).toEqual({ name: "attach", thread: "0123" });
 		expect(invalid("session")).toStartWith("session needs open, close or attach\n/nexus");
 		expect(invalid("session list 0123")).toStartWith("session has no command list\n/nexus");
@@ -139,7 +139,7 @@ describe("/nexus arguments", () => {
 		expect(invalid("session open 0123 --harness codex")).toStartWith("session open needs a harness of claude-code, pi, shell, got codex\n/nexus");
 		expect(invalid("session open 0123 --node n")).toStartWith("session open takes only --harness and --title, got --node\n/nexus");
 		expect(invalid("session open 0123 --title")).toStartWith("session open needs a title after --title\n/nexus");
-		expect(invalid("session close")).toStartWith("session close needs a thread, and may name a pane\n/nexus");
+		expect(invalid("session close")).toStartWith("session close needs a thread, and may name a session's pane or ID\n/nexus");
 		expect(invalid("session attach 0123 %3")).toStartWith("session attach needs a thread\n/nexus");
 	});
 

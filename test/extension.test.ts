@@ -80,15 +80,16 @@ describe("/nexus", () => {
 		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session open command: opening a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
 	});
 
-	test("session close closes the pane given, or asks which with Keep them all first", async () => {
+	test("session close closes the session given by its pane or ID, or asks which with Keep them all first", async () => {
 		const n = load({ responses: { threads, "session close": null } });
 		await n.run(`session close ${idA} %3`);
 		expect(n.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%3"]);
-		expect(n.notified).toEqual([[`Closed pane %3 of ${idA}.`, "info"]]);
+		expect(n.notified).toEqual([[`Closed session %3 of ${idA}.`, "info"]]);
+		// A control plane older than session states lists sessions without state, ID or message, which read as running in their pane.
 		const sessions = [{ ...detail.sessions[0]!, title: "review" }, { harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: null }];
 		const asking = load({ responses: { threads, show: { ...detail, sessions }, "session close": null } }, { answer: "Claude Code in pane %5, idle" });
 		await asking.run(`session close ${idA}`);
-		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? Its agent ends.`, options: ["Keep them all", 'pi "review" in pane %3, working', "Claude Code in pane %5, idle"] }]);
+		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? A running one's agent ends.`, options: ["Keep them all", 'pi "review" in pane %3, working', "Claude Code in pane %5, idle"] }]);
 		expect(asking.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%5"]);
 		const kept = load({ responses: { threads, show: { ...detail, sessions } } }, { answer: undefined });
 		await kept.run(`session close ${idA}`);
@@ -100,6 +101,35 @@ describe("/nexus", () => {
 		const old = load({ responses: { threads }, fail: { "session close": { exit: 64, kind: "invalid", error: "unknown command session" } } });
 		await old.run(`session close ${idA} %3`);
 		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session close command: closing a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+	});
+
+	test("session close never offers a paused session, offers a failed one with why, and closes it by its ID", async () => {
+		const paused = { ...detail.sessions[0]!, id: "w1:p1", herdrPane: "w1:p1", state: "paused", title: "review" };
+		const failed = { ...detail.sessions[0]!, id: "failed-0123456789ab", herdrPane: null, harnessSessionId: "/s.jsonl", state: "failed", title: "plan", message: "herdr agent start: the agent did not start.\nThe pane showed:\n$" };
+		const label = 'pi "plan" in session failed-0123456789ab, failed: herdr agent start: the agent did not start.';
+		const asking = load({ responses: { threads, show: { ...detail, sessions: [paused, failed] }, "session close": null } }, { answer: label });
+		await asking.run(`session close ${idA}`);
+		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? A running one's agent ends.`, options: ["Keep them all", label] }]);
+		expect(asking.calls()).toContainEqual(["session", "close", "--json", "--", idA, "failed-0123456789ab"]);
+		expect(asking.notified).toEqual([[`Closed session failed-0123456789ab of ${idA}.`, "info"]]);
+		// With only paused sessions there is nothing to ask, and nothing is sent.
+		const archived = { ...detail, thread: { ...detail.thread, status: "archived" }, sessions: [paused] };
+		const onlyPaused = load({ responses: { threads, show: archived } });
+		await onlyPaused.run(`session close ${idA}`);
+		expect(onlyPaused.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(onlyPaused.notified).toEqual([[`${idA} has no session to close: pi "review" is paused with the pylon and resumes on unarchive. Close it once it runs.`, "info"]]);
+	});
+
+	test("session close shows the CLI's refusal of a paused session, and of a pane a wake moved, in its words", async () => {
+		const refusal = `session w1:p1 is paused with its pylon and resumes when its pylon wakes. Close it once it runs`;
+		const n = load({ responses: { threads }, fail: { "session close": { exit: 5, kind: "conflict", error: refusal } } });
+		await n.run(`session close ${idA} w1:p1`);
+		expect(n.calls().filter((c) => c[0] === "session")).toHaveLength(1);
+		expect(n.notified.at(-1)).toEqual([`nexus: ${refusal}`, "error"]);
+		const moved = "no session is open in pane w1:p1 of pylon py-0123. A wake may have moved it to another pane, which the thread's sessions list";
+		const gone = load({ responses: { threads }, fail: { "session close": { exit: 4, kind: "not-found", error: moved } } });
+		await gone.run(`session close ${idA} w1:p1`);
+		expect(gone.notified.at(-1)).toEqual([`nexus: ${moved}`, "error"]);
 	});
 
 	test("a port being published or unpublished refuses a second change from any entry point, without queueing it", async () => {
