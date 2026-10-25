@@ -70,6 +70,11 @@ describe("model tools", () => {
 		expect(calls()).toEqual([["project", "add", "--json", "--node=lab", "--branch=main", "--", "repo", "url"]]);
 	});
 
+	test("project add names CLI 0.7.0 when the command is missing", async () => {
+		const { call } = setup({ fail: { project: { exit: 64, kind: "invalid", error: "unknown command project" } } });
+		expect(await failure(call("nexus_project_add", { id: "repo", scratch: true, node: "lab" }))).toBe("nexus (invalid): nexus has no project add command: adding a project needs Nexus CLI 0.7.0 or later (nexus --version). Update the nexus CLI.");
+	});
+
 	test("project schemas reject extra secrets, secret hosts and invalid logins", () => {
 		const schema = nexusTools(createNexus()).find((tool) => tool.name === "nexus_project_add")!.parameters;
 		for (const extra of [{ secret: "GH_TOKEN:evil.example" }, { secrets: ["EVIL:evil.example"] }, { secret_hosts: ["evil.example"] }, { logins: ["other"] }]) {

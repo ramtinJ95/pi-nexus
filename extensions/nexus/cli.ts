@@ -270,7 +270,11 @@ export async function addModelProject(nexus: Nexus, add: ModelProject, signal?: 
 	for (const login of add.logins ?? []) flags.push(`--login=${login}`);
 	// Never let model-supplied hosts or secret names change this credential grant.
 	if (add.github === true) flags.push("--secret=GH_TOKEN:api.github.com,github.com");
-	return parse(Project, await nexus.run(["project add", ...flags, "--", add.id.trim(), ...(add.repo_url !== undefined ? [add.repo_url.trim()] : [])], signal), "nexus project add");
+	try {
+		return parse(Project, await nexus.run(["project add", ...flags, "--", add.id.trim(), ...(add.repo_url !== undefined ? [add.repo_url.trim()] : [])], signal), "nexus project add");
+	} catch (err) {
+		throw newer(err, "project add", "adding a project", "0.7.0", true);
+	}
 }
 
 /**
