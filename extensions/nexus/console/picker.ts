@@ -53,6 +53,7 @@ export class Picker implements Component, Focusable {
 	private error: string | undefined;
 	/** The project shown, or null for every project. */
 	private scope: string | null = null;
+	private projects: readonly Project[] = [];
 	private _focused = false;
 
 	constructor(
@@ -81,6 +82,7 @@ export class Picker implements Component, Focusable {
 		const keep = this.at ?? (current?.kind === "thread" ? current.thread.id : undefined);
 		this.at = undefined;
 		this.scope = scope;
+		this.projects = projects;
 		this.groups = groups(inScope(threads, scope), scope === null ? projects : projects.filter((p) => p.id === scope));
 		this.marks = marks;
 		this.error = undefined;
@@ -238,7 +240,8 @@ export class Picker implements Component, Focusable {
 		const out = new Map<ThreadRow, string>();
 		threads.forEach((th, i) => {
 			const selected = this.rows[this.selected]?.kind === "thread" && (this.rows[this.selected] as { thread: ThreadRow }).thread === th;
-			const right = cells[i]!.level[level]!.flatMap((cell, c) => (widths[c] === 0 ? [] : [cell.padEnd(widths[c]!)])).join("  ").trimEnd();
+			// Keep every row the same width; only the final activity age is right-aligned within its column.
+			const right = cells[i]!.level[level]!.flatMap((cell, c) => (widths[c] === 0 ? [] : [c === widths.length - 1 ? cell.padStart(widths[c]!) : cell.padEnd(widths[c]!)])).join("  ");
 			const prefix = selected ? t.fg("accent", "→ ") : "  ";
 			const left = ` ${prefix}${t.fg(toneColor[cells[i]!.tone], "●")} ${selected ? t.fg("accent", th.title) : th.title}${this.marker(th)}`;
 			const shownLeft = truncateToWidth(left, Math.max(10, width - visibleWidth(right) - 2));
@@ -254,7 +257,7 @@ export class Picker implements Component, Focusable {
 			case "new":
 				return ` ${prefix}${t.fg(selected ? "accent" : "muted", "+ New thread")}`;
 			case "project":
-				return ` ${t.fg("accent", t.bold(row.project))}${t.fg("dim", ` ${row.count}`)}`;
+				return ` ▾ ${t.fg("accent", t.bold(row.project))}${t.fg("dim", `  ${this.projects.find((p) => p.id === row.project)?.defaultBranch ?? ""}`)}`;
 			case "fold":
 				return ` ${prefix}${t.fg("muted", `${row.open ? "▾" : "▸"} ${row.label}`)}`;
 			case "thread":

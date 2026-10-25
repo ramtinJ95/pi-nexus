@@ -26,6 +26,8 @@ export interface Viewed {
 }
 
 export interface Settings {
+	/** Compare the checkout to HEAD instead of its boot base. Absent in older settings. */
+	uncommitted?: boolean;
 	/** Whether the strip of threads that need you, have news or work shows above the editor. */
 	strip: boolean;
 	/** The project whose threads the picker, the strip and the status line show, or null for every project. */
@@ -54,7 +56,8 @@ const isSeen = (value: unknown): value is Seen =>
 /** A file from before projects has no `project`, which reads as every project. */
 const isSettings = (value: unknown): value is Partial<Settings> & { strip: boolean } => {
 	const project = (value as Partial<Settings> | null)?.project;
-	return typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean" && (project === undefined || project === null || typeof project === "string");
+	const uncommitted = (value as Partial<Settings> | null)?.uncommitted;
+	return typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean" && (uncommitted === undefined || typeof uncommitted === "boolean") && (project === undefined || project === null || typeof project === "string");
 };
 
 const directory = () => path.join(getAgentDir(), "pi-nexus");

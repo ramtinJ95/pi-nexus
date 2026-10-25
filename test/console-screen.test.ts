@@ -68,6 +68,11 @@ function open(
 		display: display(),
 		thread: idA,
 		cli,
+		checkout: { uncommitted: false, actions: {
+			changes: async (head) => ({ base: { kind: head ? "head" : "start", commit: null }, files: [], truncated: false }),
+			diff: async () => ({ base: { kind: "start", commit: null }, diff: "", truncated: false }),
+			persist() {},
+		} },
 		now: () => clock,
 		done: (end) => ends.push(end),
 		actions: {
@@ -161,7 +166,7 @@ describe("thread view", () => {
 		expect(out).toContain("✓ backs off");
 		expect(out).toContain("Queued: also update the docs");
 		expect(out).toMatch(/── \S Working · 1m 12s · 4 tools this turn · new messages queue ─+/);
-		expect(out).toContain("nexus / Fix the probe retry (th-0123456789ab)");
+		expect(out).toContain("nexus / Fix the probe retry ● agent working (th-0123456789ab)");
 		expect(out).toMatch(/pylon running on firebat · seen 1 min ago · wanted running · 1 preview · 1 output +demo-model/);
 	});
 
@@ -208,7 +213,7 @@ describe("thread view", () => {
 		expect(s.mode()).toBe("normal");
 		expect(cursor()).toBe(false);
 		s.press("l");
-		expect(s.text()).toContain("Pylon");
+		expect(s.text()).toContain("Reading the changes…");
 		s.press("l");
 		expect(s.text()).toContain("Previews 1");
 		s.press("l", "l");
@@ -229,7 +234,7 @@ describe("thread view", () => {
 		s.press(keys.escape);
 		expect(s.mode()).toBe("normal");
 		expect(cursor()).toBe(false);
-		s.press("2");
+		s.press("4");
 		expect(s.text()).toContain("Pylon");
 		// The draft waits in the composer while the view moves.
 		expect(s.text()).toMatch(/^hjkl/m);
@@ -291,7 +296,7 @@ describe("thread view", () => {
 		expect(lines).toHaveLength(12);
 		const out = plain(lines);
 		expect(out).toContain("Working ·");
-		expect(out).toContain("nexus / Fix the probe retry (th-0123456789ab)");
+		expect(out).toContain("nexus / Fix the probe retry ● agent working (th-0123456789ab)");
 		expect(out).toContain("Nexus is unreachable: no proxy. Still watching.");
 		const tall = open({ entries, state: working, live: { ...live, queued } }).text();
 		expect(tall).toContain("Queued: follow-up 2");
@@ -343,7 +348,7 @@ describe("thread view", () => {
 
 	test("h on the conversation goes back, q closes, t opens the picker, and Esc returns to the conversation but never closes or aborts", () => {
 		const s = open();
-		s.normal("2");
+		s.normal("4");
 		expect(s.text()).toContain("Pylon");
 		s.press(keys.escape);
 		expect(s.text()).not.toContain("Desired");
@@ -360,7 +365,7 @@ describe("thread view", () => {
 		const s = open();
 		s.press("s");
 		expect(s.text()).toContain("Keys in normal mode");
-		expect(s.text()).toMatch(/gg\/home +the top, or the first port/);
+		expect(s.text()).toMatch(/gg\/home +the top, or the first file, port or session/);
 		expect(s.text()).toMatch(/ctrl\+o +expand or fold tool output, as in pi/);
 		s.press("q");
 		expect(s.ends).toEqual([]);
@@ -426,14 +431,14 @@ describe("thread view", () => {
 		expect(s.text()).not.toContain("Watch again");
 	});
 
-	test("y in Details copies the attach command", async () => {
+	test("y in Pylon copies the terminal attach command", async () => {
 		const s = open();
 		s.press("y");
 		await s.settle();
 		expect(s.copied).toEqual([]);
-		s.press("l", "y");
+		s.press("4", "y");
 		await s.settle();
-		expect(s.copied).toEqual(["herdr --session nexus"]);
+		expect(s.copied).toEqual(["nexus attach th-0123456789ab"]);
 	});
 
 	test("Delete in the actions asks with Keep first, as /delete does", async () => {
@@ -461,19 +466,19 @@ describe("thread view", () => {
 		expect(s.ends).toEqual([{ kind: "start-again", project: "nexus", title: "Fix the probe retry" }]);
 	});
 
-	test("Details shows the pylon, outputs and attach command, and Ports the previews and ports", () => {
+	test("Pylon shows the pylon, outputs, attach command and sessions; Previews shows previews and ports", () => {
 		const s = open();
 		s.screen.setNodes([{ name: "firebat", state: "offline" }]);
-		s.normal("2");
+		s.normal("4");
 		const details = s.text();
 		expect(details).toMatch(/Desired +● running/);
 		expect(details).toMatch(/Node +firebat offline/);
 		expect(details).toMatch(/Last seen +1 min ago \(stale\)/);
 		// The preview output repeats the listed preview, so only the branch is left.
 		expect(details).toMatch(/Outputs 1\n +branch +nexus\/th-0123456789ab\n\n/);
-		expect(details).not.toContain("%3");
+		expect(details).toContain("%3");
 		expect(details).toContain("herdr --session nexus");
-		expect(details).not.toContain("Previews");
+		expect(details).not.toContain("https://firebat.example.ts.net");
 		s.press("3");
 		const out = s.text();
 		expect(out).not.toContain("Desired");
@@ -484,7 +489,7 @@ describe("thread view", () => {
 		// Each port shows once: 5173 under Previews, and 8080, which has no preview, under Ports.
 		expect(out).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
 		expect(out.match(/5173/g)).toHaveLength(1);
-		expect(out).toContain("1 Conversation   2 Details   3 Ports 2   4 Sessions 1");
+		expect(out).toContain("1 Conversation   2 Changes   3 Previews 1   4 Pylon");
 	});
 
 	test("in Ports, j and k select a row, Enter publishes a port, x unpublishes its own preview, and y copies a link", async () => {
@@ -529,7 +534,7 @@ describe("thread view", () => {
 		const s = open(undefined, { shown: withSessions });
 		s.normal("4");
 		const out = s.text();
-		expect(out).toContain("1 Conversation   2 Details   3 Ports 2   4 Sessions 3");
+		expect(out).toContain("1 Conversation   2 Changes   3 Previews 1   4 Pylon");
 		expect(out).toMatch(/Sessions 3\n → Claude Code  login fix  ● idle  %5  session sid-1\n     enter or \/attach attaches this terminal, x closes the session\n +pi +● working  %3  session abc\n +Shell +● unknown  %9\n/);
 		expect(out).toContain("Attach from this Mac\n   nexus attach th-0123456789ab\n   enter runs it here, and y copies it.");
 		expect(out).toContain('set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json');
@@ -571,7 +576,7 @@ describe("thread view", () => {
 		await s.settle();
 		expect(s.text()).not.toContain("Opening pi");
 		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
-		expect(s.text().replace(/\s+/g, " ")).toContain('Opened Claude Code "claude-code" in pane %7. Enter in Sessions, or /attach, attaches this terminal: pick the session\'s workspace in Herdr.');
+		expect(s.text().replace(/\s+/g, " ")).toContain('Opened Claude Code "claude-code" in pane %7. Enter in Pylon, or /attach, attaches this terminal: pick the session\'s workspace in Herdr.');
 		expect(s.refreshes()).toBe(refreshes + 1);
 		// Details asked for after the open are the sessions as they are.
 		s.details({ ...withSessions, sessions: [...withSessions.sessions, { id: "%7", state: "running", message: null, harness: "claude-code", herdrPane: "%7", status: "blocked", harnessSessionId: "sid-7", title: "claude-code" }] });
@@ -603,7 +608,7 @@ describe("thread view", () => {
 		await s.settle();
 		s.details(withSessions);
 		expect(s.text()).not.toMatch(/login fix/);
-		expect(s.text()).toContain("4 Sessions 2");
+		expect(s.text()).toContain("Sessions 2");
 		// Details that never stop listing it win once the half minute is up.
 		s.tick(30_000);
 		s.details(withSessions);
@@ -644,7 +649,7 @@ describe("thread view", () => {
 		await s.settle();
 		expect(s.text()).toContain("Closed pane %3.");
 		expect(s.text()).not.toMatch(/pi +● /);
-		expect(s.text()).toContain("4 Sessions 2");
+		expect(s.text()).toContain("Sessions 2");
 	});
 
 	test("a paused session reads as resuming on wake, or on unarchive, and x does not close it", () => {
@@ -690,7 +695,8 @@ describe("thread view", () => {
 		s.release();
 		await s.settle();
 		expect(s.text()).toContain("Closed session failed-0123456789ab.");
-		expect(s.text()).toContain("4 Sessions 1");
+		expect(s.text()).toContain("4 Pylon");
+		expect(s.text()).toContain("Sessions 1");
 	});
 
 	test("a close the CLI refuses says why in its words, keeps the session and reads the sessions again", async () => {
@@ -746,7 +752,8 @@ describe("thread view", () => {
 		expect(s.text()).not.toContain("● opened");
 		expect(s.text()).toMatch(/pi +● working  %7  session abc/);
 		expect(s.text()).toMatch(/Claude Code  claude-code  ● blocked  %8  session sid-8/);
-		expect(s.text()).toContain("4 Sessions 4");
+		expect(s.text()).toContain("4 Pylon");
+		expect(s.text()).toContain("Sessions 4");
 	});
 
 	test("a session just opened keeps its row while stale details list only the sessions there before, even in its pane", async () => {

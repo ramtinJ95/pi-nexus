@@ -17,6 +17,8 @@ import {
 	listThreads,
 	openSession,
 	previewPort,
+	readChanges,
+	readDiff,
 	sendText,
 	showThread,
 	startThread,
@@ -27,7 +29,7 @@ import type { Action } from "../commands.ts";
 import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
 import type { NodeSummary, ThreadRow } from "../contract.ts";
 import { inScope, type Scope } from "../scope.ts";
-import type { Viewed } from "../store.ts";
+import type { SettingsStore, Viewed } from "../store.ts";
 import { attachCommand, isClosed, noteParked, startArgs, type Parked } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { ProjectFormView } from "./project-form.ts";
@@ -157,6 +159,7 @@ export class Console {
 		private readonly scope: Scope,
 		/** Says what went wrong outside a view, such as a look that could not be recorded. */
 		private readonly warn: (message: string) => void,
+		private readonly settings: SettingsStore,
 		private readonly display: (cwd: string) => Display = userDisplay,
 	) {}
 
@@ -422,6 +425,14 @@ export class Console {
 			display: this.display(cwd),
 			thread,
 			cli: nexus.bin,
+			checkout: {
+				uncommitted: this.settings.read().uncommitted ?? false,
+				actions: {
+					changes: (base, aborted) => readChanges(nexus, thread, base, AbortSignal.any([signal, aborted])),
+					diff: (paths, base, aborted) => readDiff(nexus, thread, paths, base, AbortSignal.any([signal, aborted])),
+					persist: (uncommitted) => this.settings.update({ uncommitted }),
+				},
+			},
 			draft: this.drafts.get(thread),
 			done: (end) => {
 				const draft = screen.draft;

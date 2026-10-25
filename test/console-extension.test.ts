@@ -96,6 +96,106 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 }
 
 describe("console", () => {
+	test("Changes uses the CLI on demand, opens both rename paths, keeps the tree cursor and persists c", async () => {
+		const changes = { base: { kind: "start", commit: "9abe10e" }, files: [
+			{ path: "src/checkout/new.ts", oldPath: "old.ts", status: "renamed", additions: 1, deletions: 1 },
+		], truncated: false };
+		const diff = { base: changes.base, diff: "rename from old.ts\nrename to src/checkout/new.ts\n@@ -1 +1 @@\n-old\n+new\n", truncated: false };
+		const settings = memorySettings();
+		const n = load({ ...scenario, responses: { ...scenario.responses, changes, diff } }, { settings });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread");
+		expect(n.calls().some((c) => c[0] === "changes")).toBe(false);
+		n.press("2");
+		await n.until(() => n.text().includes("R new.ts"), "the tree");
+		expect(n.text()).toContain("1 Conversation   2 Changes 1   3 Previews 1   4 Pylon");
+		expect(n.text()).toContain("→ ▾ src/checkout");
+		n.press("o"); expect(n.text()).toContain("▸ src/checkout"); expect(n.text()).not.toContain("R new.ts");
+		n.press("\r", "j", "o");
+		await n.until(() => n.text().includes("rename from old.ts"), "the diff");
+		expect(n.calls()).toContainEqual(["diff", "--json", "--", idA, "src/checkout/new.ts", "old.ts"]);
+		expect(n.text()).toContain("vs boot");
+		n.press("h"); expect(n.text()).toContain("→   R new.ts");
+		n.press("o"); await n.until(() => n.text().includes("rename from old.ts"), "the diff again");
+		n.press("\x1b"); expect(n.text()).toContain("→   R new.ts");
+		n.press("c");
+		await n.until(() => n.calls().some((c) => c[0] === "changes" && c.includes("--uncommitted")), "HEAD changes");
+		expect(settings.read().uncommitted).toBe(true);
+		n.press("3"); expect(n.text()).toContain("https://firebat.example.ts.net");
+		n.press("4"); expect(n.text()).toContain("Desired"); expect(n.text()).toContain("Sessions 1");
+		n.press("\t"); expect(n.text()).toContain("I'll read the probe first.");
+		n.type("/info"); expect(n.text()).toContain("Desired"); expect(n.text()).toContain("Sessions 1");
+		n.normal("q"); await done;
+		const later = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 2 && n.text().includes("nexus / Fix"), "the reopened thread");
+		n.press("2");
+		await n.until(() => n.text().includes("R new.ts"), "the persisted base");
+		expect(n.calls().filter((c) => c[0] === "changes").at(-1)).toContain("--uncommitted");
+		n.press("q"); await later;
+	});
+
+	test("a paused Changes tab records the visit but does not read the checkout until Enter explicitly asks", async () => {
+		const paused = { ...working, run: "idle" as const, pylon: "paused", queued: 0 };
+		const n = load({ ...scenario,
+			responses: { ...scenario.responses, show: { ...detail, pylon: { ...detail.pylon, actualState: "paused" } }, changes: { base: { kind: "start", commit: null }, files: [], truncated: false } },
+			watch: [{ event: state(idA, paused) }], delayMs: { changes: 10_000 },
+		});
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("pylon paused"), "paused thread");
+		n.press("2"); expect(n.text()).toContain("The pylon is paused. Reading its changes wakes it.");
+		await n.until(() => n.calls().some((c) => c[0] === "wake"), "the visit");
+		expect(n.calls().some((c) => ["changes", "diff"].includes(c[0]!))).toBe(false);
+		n.press("\r");
+		await n.until(() => n.calls().some((c) => c[0] === "changes"), "the wake read");
+		expect(n.text()).toContain("Waking the pylon. Its changes show once it runs.");
+		n.press("q"); await done;
+	});
+
+	test("an ended running watch cannot overrule a later paused show or wake Changes on opening or c", async () => {
+		const n = load({ ...scenario,
+			responses: { ...scenario.responses, show: { ...detail, pylon: { ...detail.pylon, actualState: "paused" } } },
+			watch: [{ event: state(idA, working) }], watchHold: false, delayMs: { show: 250 },
+		});
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("The watch ended") && n.text().includes("nexus / Fix"), "the ended watch and later detail");
+		n.press("2");
+		expect(n.text()).toContain("The pylon is paused. Reading its changes wakes it.");
+		n.press("c");
+		expect(n.text()).toContain("The pylon is paused. Reading its changes wakes it.");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(n.calls().filter((c) => ["changes", "diff"].includes(c[0]!))).toEqual([]);
+		n.press("q"); await done;
+	});
+
+	test("an ended paused watch is ignored once show reports running", async () => {
+		const n = load({ ...scenario,
+			responses: { ...scenario.responses, changes: { base: { kind: "start", commit: null }, files: [], truncated: false } },
+			watch: [{ event: state(idA, { ...working, pylon: "paused" }) }], watchHold: false, delayMs: { show: 250 },
+		});
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("The watch ended") && n.text().includes("nexus / Fix"), "the ended watch and running detail");
+		n.press("2");
+		await n.until(() => n.text().includes("Nothing has changed since the pylon booted."), "the checkout read from current detail");
+		expect(n.calls().filter((c) => c[0] === "changes")).toHaveLength(1);
+		n.press("q"); await done;
+	});
+
+	test("disagreeing live watch and show states both veto an implicit checkout wake", async () => {
+		for (const [watched, shown] of [["running", "paused"], ["paused", "running"]]) {
+			const n = load({ ...scenario,
+				responses: { ...scenario.responses, show: { ...detail, pylon: { ...detail.pylon, actualState: shown! } } },
+				watch: [{ event: state(idA, { ...working, pylon: watched! }) }],
+			});
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the live watch and detail");
+			n.press("2", "c");
+			expect(n.text()).toContain("The pylon is paused. Reading its changes wakes it.");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			expect(n.calls().filter((c) => ["changes", "diff"].includes(c[0]!))).toEqual([]);
+			n.press("q"); await done;
+		}
+	});
+
 	test("/nexus open fills the screen with the thread, records the visit and sends with a request ID", async () => {
 		const n = load(scenario);
 		const done = n.run(`open ${idA}`);
@@ -283,7 +383,7 @@ describe("console", () => {
 	test("/nexus opens on the working thread with the picker under it, so h goes back to the picker and q closes", async () => {
 		const n = load(scenario);
 		const done = n.run("");
-		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix the probe retry (th-0123456789ab)"), "the working thread");
+		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix the probe retry ● agent working (th-0123456789ab)"), "the working thread");
 		expect(n.shown[0]!.options).toMatchObject({ overlay: true });
 		n.press("h");
 		await n.until(() => n.shown.length === 2 && n.text().includes(threads[1]!.title), "the picker");
@@ -543,7 +643,7 @@ describe("console", () => {
 			n.press(..."fork", "\t", ..."git@github.com:me/fork.git", "\t", "\t", "\r");
 			await n.until(() => n.shown.length === 4 && n.text().includes("Nexus threads · fork"), "the picker on the new project");
 			expect(n.calls()).toContainEqual(["project", "add", "--json", "--node=firebat", "--branch=main", "--", "fork", "git@github.com:me/fork.git"]);
-			expect(n.text()).toMatch(/fork 0\n/);
+			expect(n.text()).toMatch(/▾ fork  main\n/);
 			expect(settings.writes).toEqual([{ project: "fork" }]);
 			n.press("q");
 			await done;
@@ -869,7 +969,7 @@ describe("the contract", () => {
 		void n.run(`open ${idA}`);
 		await n.until(() => n.shown.length === 1 && n.text().includes("could not be read"), "the detail's error");
 		expect(n.text().replace(/\s+/g, " ")).toContain(`The thread's details could not be read: nexus show ${idA} breaks the contract: outputs[0].kind must be string`);
-		n.normal("2");
+		n.normal("4");
 		expect(n.text()).toContain("Loading the pylon's details...");
 		n.shown[0]!.done({ kind: "close" });
 	});
