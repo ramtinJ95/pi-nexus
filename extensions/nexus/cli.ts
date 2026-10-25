@@ -241,6 +241,45 @@ export async function addProject(nexus: Nexus, add: { id: string; repoUrl: strin
 	}
 }
 
+export interface ModelProject {
+	id: string;
+	repo_url?: string;
+	scratch?: boolean;
+	node?: string;
+	branch?: string;
+	cpus?: number;
+	memory_gib?: number;
+	disk_gib?: number;
+	allow_hosts?: string[];
+	logins?: ("claude" | "chatgpt")[];
+	github?: boolean;
+}
+
+export async function addModelProject(nexus: Nexus, add: ModelProject, signal?: AbortSignal): Promise<Project> {
+	if (!add.id.trim()) throw new NexusError("failed", "id is required");
+	if ((add.repo_url !== undefined) === (add.scratch === true)) throw new NexusError("failed", "provide exactly one of repo_url or scratch: true");
+	if (add.repo_url !== undefined && !add.repo_url.trim()) throw new NexusError("failed", "repo_url is required");
+	const node = add.node ?? (await listNodes(nexus, signal)).find((node) => node.state === "online")?.name;
+	if (node === undefined) throw new NexusError("failed", "no online node is available; provide node explicitly");
+	const flags = [`--node=${node}`, `--branch=${add.branch ?? "main"}`];
+	if (add.scratch === true) flags.push("--scratch");
+	for (const [key, flag] of [["cpus", "cpus"], ["memory_gib", "memory"], ["disk_gib", "disk"]] as const) {
+		if (add[key] !== undefined) flags.push(`--${flag}=${add[key]}`);
+	}
+	for (const host of add.allow_hosts ?? []) flags.push(`--allow-host=${host}`);
+	for (const login of add.logins ?? []) flags.push(`--login=${login}`);
+	// Never let model-supplied hosts or secret names change this credential grant.
+	if (add.github === true) flags.push("--secret=GH_TOKEN:api.github.com,github.com");
+	try {
+		return parse(Project, await nexus.run(["project add", ...flags, "--", add.id.trim(), ...(add.repo_url !== undefined ? [add.repo_url.trim()] : [])], signal), "nexus project add");
+	} catch (err) {
+		if (err instanceof NexusError && err.kind === "invalid" && /^Unknown option '--(?:scratch|secret)'(?:\.|$)/.test(err.message)) {
+			throw new NexusError("invalid", `${err.message}: adding a project with --scratch or --secret needs Nexus CLI 0.7.0 or later (nexus --version). Update the nexus CLI.`);
+		}
+		throw newer(err, "project add", "adding a project", "0.7.0", true);
+	}
+}
+
 /**
  * Opens a session in the pylon, which needs CLI 0.5.0: a Herdr workspace with the harness's agent in it, Claude Code
  * unless `harness` names another, titled with the harness's name unless `title` is given. A paused pylon is woken

@@ -5,7 +5,7 @@
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema, type Static } from "typebox";
-import { listThreads, previewPort, readThread, sendText, startThread, threadId, unpreviewPort, waitThread, type Nexus } from "./cli.ts";
+import { addModelProject, listProjects, listThreads, previewPort, readThread, sendText, startThread, threadId, unpreviewPort, waitThread, type Nexus } from "./cli.ts";
 import type { ListeningPort, ThreadState } from "./contract.ts";
 import { ago, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
 
@@ -53,6 +53,7 @@ const stateFields = (state: ThreadState | undefined) =>
 function jsonTool<P extends TSchema>(spec: { name: string; label: string; description: string; parameters: P }, run: (params: Static<P>, signal: AbortSignal | undefined) => Promise<unknown>) {
 	return defineTool({
 		...spec,
+		description: `${spec.description} Nexus manages project threads and their pylon VMs.`,
 		async execute(_id, params, signal) {
 			try {
 				const value = await run(params, signal);
@@ -67,6 +68,36 @@ function jsonTool<P extends TSchema>(spec: { name: string; label: string; descri
 
 export function nexusTools(nexus: Nexus) {
 	return [
+		jsonTool(
+			{
+				name: "nexus_projects",
+				label: "Nexus projects",
+				description: "List Nexus projects and their repository, default node and branch. Read-only.",
+				parameters: Type.Object({}, { additionalProperties: false }),
+			},
+			async (_params, signal) => listProjects(nexus, signal),
+		),
+		jsonTool(
+			{
+				name: "nexus_project_add",
+				label: "Nexus project add",
+				description: "Add a Nexus project from a repository URL or as scratch. Needs Nexus CLI 0.7.0 or later. GitHub access grants only GH_TOKEN to api.github.com and github.com.",
+				parameters: Type.Object({
+					id: Type.String(),
+					repo_url: Type.Optional(Type.String({ description: "Repository URL; exactly one of repo_url or scratch: true is required" })),
+					scratch: Type.Optional(Type.Boolean({ description: "Start with an empty repository instead of repo_url" })),
+					node: Type.Optional(Type.String({ description: "Defaults to the first online node" })),
+					branch: Type.Optional(Type.String({ description: "Default main" })),
+					cpus: Type.Optional(Type.Number()),
+					memory_gib: Type.Optional(Type.Number()),
+					disk_gib: Type.Optional(Type.Number()),
+					allow_hosts: Type.Optional(Type.Array(Type.String())),
+					logins: Type.Optional(Type.Array(Type.Union([Type.Literal("claude"), Type.Literal("chatgpt")]))),
+					github: Type.Optional(Type.Boolean()),
+				}, { additionalProperties: false }),
+			},
+			async (params, signal) => addModelProject(nexus, params, signal),
+		),
 		jsonTool(
 			{
 				name: "nexus_threads",
