@@ -21,7 +21,6 @@ import {
 	shownOutputs,
 	sshHint,
 	toneColor,
-	unreachableHint,
 	type PortChange,
 	type SessionChanges,
 	type Tone,
@@ -205,7 +204,7 @@ export function portLines(
 	if (ports === null) lines.push(`   ${t.fg("dim", "The pylon's ports could not be read.")}`);
 	else if (unpublished.length === 0) {
 		if (detail.pylon.actualState !== "running") lines.push(`   ${t.fg("dim", "Ports show while the pylon runs.")}`);
-		else w.wrapped(`${ports.length === 0 ? "Nothing listens yet." : "Every port that listens is under Previews."} ${unreachableHint}`, "dim");
+		else w.wrapped(`${ports.length === 0 ? "Nothing listens yet." : "Every port that listens is under Previews."}`, "dim");
 	}
 	for (const { port: p, i } of unpublished) {
 		row(i, () => {

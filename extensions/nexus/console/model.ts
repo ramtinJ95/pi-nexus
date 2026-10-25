@@ -638,15 +638,12 @@ export function portAction(
 	return { kind: "unpublish", port: own };
 }
 
-/** The preview reaches only the pylon's 127.0.0.1, so a server bound only to ::1 is neither listed nor reachable. */
-export const unreachableHint = "A server bound only to ::1 can't be previewed, so bind it to 0.0.0.0 or 127.0.0.1.";
-
 export type PreviewLook = { linked: boolean; label: string | null; tone: Tone; hint: string | null };
 
 /**
  * A paused pylon's preview keeps its link, because a visit wakes the pylon. An archived thread's pylon stays paused
- * whatever the visit, so its preview would only show the waking page. A failed service's preview has no link, because
- * the gateway can only answer 502 for it, and its hint is why the service failed.
+ * whatever the visit, so its preview would only show the waking page. A failed preview, whose service failed or whose
+ * port has no route into the pylon, has no link, because its URL cannot reach the server, and its hint is why.
  */
 export function previewLook(detail: ThreadDetail, preview: Pick<Preview, "ready" | "failed">): PreviewLook {
 	if (detail.thread.status === "archived") return { linked: false, label: "paused", tone: "idle", hint: "Unarchive the thread to open it." };

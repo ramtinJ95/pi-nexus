@@ -831,8 +831,9 @@ describe("thread view", () => {
 			return plain(s.screen.render(160));
 		};
 		const none = inspect({ ...detail, ports: [] });
-		expect(none).toContain("Nothing listens yet. A server bound only to ::1 can't be previewed, so bind it to 0.0.0.0 or 127.0.0.1.");
-		expect(inspect({ ...detail, ports: ports.slice(0, 1) })).toContain("Every port that listens is under Previews. A server bound only to ::1");
+		expect(none).toMatch(/Nothing listens yet\. *\n/);
+		expect(none).not.toContain("::1");
+		expect(inspect({ ...detail, ports: ports.slice(0, 1) })).toMatch(/Every port that listens is under Previews\. *\n/);
 		expect(inspect({ ...detail, ports: null })).toContain("The pylon's ports could not be read.");
 		expect(inspect({ ...detail, pylon: { ...detail.pylon, actualState: "paused" }, ports: [] })).toContain("Ports show while the pylon runs.");
 		const owned = inspect({ ...detail, ports: [...ports, { port: 9000, service: "api", preview: null }] });
