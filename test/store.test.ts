@@ -129,6 +129,13 @@ describe("the looks store", () => {
 });
 
 describe("the settings store", () => {
+	test("keeps the uncommitted base between sessions and alongside other choices", () => {
+		const at = file("settings.json");
+		expect(settingsFile(at).read().uncommitted ?? false).toBe(false);
+		settingsFile(at).update({ uncommitted: true });
+		settingsFile(at).update({ project: "nexus", strip: false });
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: "nexus", uncommitted: true });
+	});
 	test("shows the strip and every project until changed, and later sessions read the settings", () => {
 		const at = file("settings.json");
 		expect(settingsFile(at).read()).toEqual({ strip: true, project: null });

@@ -36,7 +36,7 @@ describe("picker", () => {
 		const out = open().text();
 		expect(out).toContain("Nexus threads");
 		expect(out).toContain("→ + New thread");
-		expect(out).toMatch(/nexus 2\n/);
+		expect(out).toMatch(/▾ nexus  main\n/);
 		expect(out).toMatch(/● Fix the probe retry +agent working  wanted running  running  firebat  human never  agent turn running  1 min/);
 		// The columns line up across rows.
 		const [fix, docs] = out.split("\n").filter((l) => l.includes("●"));
@@ -44,9 +44,23 @@ describe("picker", () => {
 		expect(docs).toContain("wanted paused");
 		expect(out).toContain("▸ 1 archived");
 		expect(out).not.toContain("Old work");
-		expect(out).toMatch(/site 0\n/);
+		expect(out).toMatch(/▾ site  trunk\n/);
 	});
 
+	test("different activity ages do not shift the overview columns", () => {
+		const list = [
+			{ ...threads[0]!, createdAt: asked + 60_000 },
+			{ ...threads[1]!, createdAt: asked - 11 * 60_000 },
+		];
+		for (const width of [140, 110]) {
+			const [fix, docs] = open(width, undefined, list).text().split("\n").filter((l) => l.includes("●"));
+			expect(fix).toEndWith("now");
+			expect(docs).toEndWith("12 min");
+			expect(fix!.length).toBe(width);
+			expect(docs!.length).toBe(width);
+			for (const column of ["wanted", "firebat", ...(width === 140 ? ["human never", "agent "] : [])]) expect(docs!.indexOf(column)).toBe(fix!.lastIndexOf(column));
+		}
+	});
 	test("narrow terminals drop columns before they cut the title", () => {
 		expect(open(110).text()).toMatch(/● Fix the probe retry +agent working  wanted running  running  firebat  1 min\n/);
 		expect(open(50).text()).toMatch(/● Fix the probe retry +agent working {2}1 min\n/);

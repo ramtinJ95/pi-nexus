@@ -10,6 +10,19 @@ import { NexusError } from "./thread.ts";
 
 const Nullable = <T extends TSchema>(schema: T) => Type.Union([schema, Type.Null()]);
 
+export const Base = Type.Object({ kind: Type.Union([Type.Literal("start"), Type.Literal("head")]), commit: Nullable(Type.String()) });
+export type Base = Static<typeof Base>;
+export const ChangedFile = Type.Object({
+	path: Type.String(), oldPath: Nullable(Type.String()),
+	status: Type.Union([Type.Literal("added"), Type.Literal("modified"), Type.Literal("deleted"), Type.Literal("renamed"), Type.Literal("copied"), Type.Literal("typechange")]),
+	additions: Nullable(Type.Number()), deletions: Nullable(Type.Number()),
+});
+export type ChangedFile = Static<typeof ChangedFile>;
+export const Changes = Type.Object({ base: Base, files: Type.Array(ChangedFile), truncated: Type.Boolean() });
+export type Changes = Static<typeof Changes>;
+export const Diff = Type.Object({ base: Base, diff: Type.String(), truncated: Type.Boolean() });
+export type Diff = Static<typeof Diff>;
+
 const ThreadStatus = Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("archived"), Type.Literal("deleted")]);
 export type ThreadStatus = Static<typeof ThreadStatus>;
 

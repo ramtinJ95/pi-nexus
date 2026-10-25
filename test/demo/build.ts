@@ -17,17 +17,19 @@
  * With `stream`, the second run of the suite has passed, and the watch streams the agent's closing answer as live
  * events ten times a second, then commits it.
  *
- * Usage: bun test/demo/build.ts <dir> [stream]
+ * Changes includes a merged folder, a binary and a rename. `paused` leaves its pylon paused for the wake note.
+ * Usage: bun test/demo/build.ts <dir> [stream|paused]
  */
 import { chmodSync, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createBashToolDefinition, createEditToolDefinition, createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { RenderedEntry } from "../../extensions/nexus/contract.ts";
+import type { Changes, Diff, RenderedEntry } from "../../extensions/nexus/contract.ts";
 import { followUp, model, probe, prompt, runningOutput, steps, testScript } from "./conversation.ts";
 
 const dir = path.resolve(process.argv[2] ?? "");
 if (!process.argv[2]) throw new Error("usage: bun test/demo/build.ts <dir> [stream]");
 const stream = process.argv[3] === "stream";
+const paused = process.argv[3] === "paused";
 const thread = "th-0123456789ab";
 
 const work = path.join(dir, "work");
@@ -148,11 +150,42 @@ const project = (id: string, repoUrl: string, defaultNode: string) => ({
 	logins: [],
 	preSetup: null,
 });
+const base = { kind: "start", commit: "9abe10e483fda" } as const;
+const changes: Changes = {
+	base,
+	files: [
+		{ path: "src/probe.ts", oldPath: null, status: "modified", additions: 12, deletions: 3 },
+		{ path: "src/retry/backoff.ts", oldPath: "src/delay.ts", status: "renamed", additions: 18, deletions: 2 },
+		{ path: "test/probe.test.ts", oldPath: null, status: "modified", additions: 14, deletions: 4 },
+		{ path: "docs/retry/guide.md", oldPath: null, status: "added", additions: 31, deletions: 0 },
+		{ path: "assets/probe.png", oldPath: null, status: "added", additions: null, deletions: null },
+		{ path: "README.md", oldPath: null, status: "modified", additions: 4, deletions: 1 },
+	],
+	truncated: false,
+};
+const diff: Diff = {
+	base, truncated: false,
+	diff: "diff --git a/src/probe.ts b/src/probe.ts\n--- a/src/probe.ts\n+++ b/src/probe.ts\n@@ -1,6 +1,10 @@\n export async function probe(url: string) {\n-  await sleep(1000);\n-  return fetch(url);\n+  for (let attempt = 0; attempt < 4; attempt++) {\n+    const response = await fetch(url);\n+    if (response.ok) return response;\n+    await sleep(backoff(attempt));\n+  }\n+  throw new Error(\"Probe exhausted its retries\");\n }\n",
+};
+if (paused) {
+	detail.pylon.actualState = "paused";
+	detail.desired = "paused";
+	detail.thread.agentTurnRunning = false;
+	detail.ports = [];
+	Object.assign(threads[0]!, { agentTurnRunning: false, desired: "paused", pylon: { node: "firebat", actualState: "paused", failed: null } });
+	for (const step of watch) {
+		if (step.event.type === "state") Object.assign(step.event, { pylon: "paused", run: "idle", ports: [], queued: 0 });
+		if (step.event.type === "live") Object.assign(step.event, { queued: [], tools: [] });
+	}
+}
 const scenario = {
+	checkout: true,
 	responses: {
 		threads,
 		show: detail,
 		wake: null,
+		changes,
+		diff,
 		nodes: [
 			{ name: "firebat", tailnetHost: "firebat.tail0000.ts.net", state: "online" },
 			{ name: "nuc", tailnetHost: "nuc.tail0000.ts.net", state: "offline" },

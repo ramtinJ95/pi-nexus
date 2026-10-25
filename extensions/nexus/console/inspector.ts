@@ -1,8 +1,7 @@
 /**
- * The thread view's Details, Ports and Sessions, as the dashboard's inspector: the pylon and its outputs under
- * Details, under Ports the previews as links and the ports that listen with no preview, and under Sessions the
- * pylon's Herdr sessions with their titles. Each port shows once: under Previews while it has one, under Ports
- * otherwise.
+ * The thread view's Pylon and Previews, as the dashboard's inspector: Pylon holds its state, outputs and Sessions;
+ * Previews holds the links and the ports that listen with no preview. Each port shows once: in the Previews
+ * section while it has one, in the Ports section otherwise.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";

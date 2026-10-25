@@ -7,7 +7,7 @@ import { Console } from "../extensions/nexus/console/index.ts";
 import { ThreadScreen } from "../extensions/nexus/console/thread-screen.ts";
 import type { WatchEvent } from "../extensions/nexus/contract.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { detail, display, entries, fakeTui, keybindings, memoryScope, memoryStores, memoryViewed, piTheme, plain, working } from "./console-fixture.ts";
+import { detail, display, entries, fakeTui, keybindings, memoryScope, memorySettings, memoryStores, memoryViewed, piTheme, plain, working } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, reset, state, threads } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -66,7 +66,7 @@ describe("a streaming answer", () => {
 				return new Promise(() => {});
 			},
 		};
-		void new Console(nexus, closed.signal, memoryViewed(), new Map(), memoryScope(), () => {}, display).thread(ui as never, "/tmp", idA);
+		void new Console(nexus, closed.signal, memoryViewed(), new Map(), memoryScope(), () => {}, memorySettings(), display).thread(ui as never, "/tmp", idA);
 		const text = () => plain(screen.render(100));
 
 		// The lines a poll prints together draw together, once.

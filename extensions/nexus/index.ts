@@ -59,7 +59,7 @@ class NexusSession {
 		({ viewed: this.viewed, settings: this.settings } = stores);
 		this.strip = this.settings.read().strip;
 		this.scope = new Scope(this.settings, (message, level) => this.ui?.notify(message, level), () => this.show());
-		this.console = new Console(nexus, this.closed.signal, this.viewed, this.parked, this.scope, (message) => this.ui?.notify(message, "warning"), display);
+		this.console = new Console(nexus, this.closed.signal, this.viewed, this.parked, this.scope, (message) => this.ui?.notify(message, "warning"), this.settings, display);
 	}
 
 	/** Takes the session's UI, and polls the threads while the strip setting is on. */

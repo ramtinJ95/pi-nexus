@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { Changes, Diff, NodeSummary, OpenedSession, parse, Preview, Project, SessionClosed, Thread, ThreadDetail, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -39,9 +39,9 @@ const spawnFailure = (bin: string, err: Error) =>
 	new NexusError("failed", `cannot run ${bin}: ${err.message}. Install the nexus CLI or point NEXUS_BIN at it`);
 
 /** `err`, or for a CLI too old to have `command`, an error that names the version `doing` needs. */
-function newer(err: unknown, command: string, doing: string, version: string): unknown {
+function newer(err: unknown, command: string, doing: string, version: string, update = false): unknown {
 	if (err instanceof NexusError && err.kind === "invalid" && err.message === `unknown command ${command.split(" ")[0]}`) {
-		return new NexusError("invalid", `nexus has no ${command} command: ${doing} needs Nexus CLI ${version} or later (nexus --version)`);
+		return new NexusError("invalid", `nexus has no ${command} command: ${doing} needs Nexus CLI ${version} or later (nexus --version)${update ? ". Update the nexus CLI." : ""}`);
 	}
 	return err;
 }
@@ -160,6 +160,18 @@ export const sendText = (nexus: Nexus, thread: string, text: string, steer: bool
 
 export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
 	parse(ThreadDetail, await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+
+export async function readChanges(nexus: Nexus, thread: string, uncommitted: boolean, signal?: AbortSignal): Promise<Changes> {
+	try {
+		return parse(Changes, await nexus.run(["changes", ...(uncommitted ? ["--uncommitted"] : []), "--", thread], signal), "nexus changes");
+	} catch (err) { throw newer(err, "changes", "reading changes", "0.6.0", true); }
+}
+
+export async function readDiff(nexus: Nexus, thread: string, paths: readonly string[], uncommitted: boolean, signal?: AbortSignal): Promise<Diff> {
+	try {
+		return parse(Diff, await nexus.run(["diff", ...(uncommitted ? ["--uncommitted"] : []), "--", thread, ...paths], signal), "nexus diff");
+	} catch (err) { throw newer(err, "diff", "reading diffs", "0.6.0", true); }
+}
 /** The `thread:port` pairs a publish or unpublish runs on, for each Nexus the session drives. */
 const portsChanging = new WeakMap<Nexus, Set<string>>();
 

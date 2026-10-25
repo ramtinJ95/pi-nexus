@@ -52,6 +52,16 @@ if (command === "attach") {
 	const added = `${process.env.FAKE_NEXUS}.projects`;
 	const adds = existsSync(added) ? readFileSync(added, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 	let reply = command === "projects" && adds.length > 0 ? [...(responses.projects ?? []), ...adds] : responses[command];
+	if (scenario.checkout && (command === "changes" || command === "diff")) {
+		const { values, positionals } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" }, uncommitted: { type: "boolean" } }, allowPositionals: true });
+		reply = { ...reply, base: { ...reply.base, kind: values.uncommitted ? "head" : "start" } };
+		if (command === "diff") {
+			const path = positionals[1];
+			if (path === "assets/probe.png") reply.diff = "Binary files /dev/null and b/assets/probe.png differ\n";
+			else if (path === "src/retry/backoff.ts") reply.diff = "diff --git a/src/delay.ts b/src/retry/backoff.ts\nsimilarity index 100%\nrename from src/delay.ts\nrename to src/retry/backoff.ts\n";
+			else if (path && path !== "src/probe.ts") reply.diff = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,2 @@\n+Retry the probe with exponential backoff.\n+Stop after four attempts.\n`;
+		}
+	}
 	if (command === "project" && argv[1] === "add" && reply === undefined) {
 		const options = { json: { type: "boolean" }, node: { type: "string" }, branch: { type: "string" } };
 		const { values, positionals: [id, repoUrl] } = parseArgs({ args: argv.slice(2), options, allowPositionals: true });
