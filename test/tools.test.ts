@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Value } from "typebox/value";
 import { createNexus } from "../extensions/nexus/cli.ts";
 import { nexusTools } from "../extensions/nexus/tools.ts";
 import { assistant, entry, fakeNexus, head, idA, idB, idle, reset, row, state, thread, threads, toolCall, toolResult, user, working, type Scenario } from "./fixtures.ts";
@@ -28,7 +29,52 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 
 describe("model tools", () => {
 	test("the model gets no delete or retry", () => {
-		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
+		expect(setup({}).names.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_project_add", "nexus_projects", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
+	});
+
+	test("projects returns the CLI projects, including scratch and extra Project fields", async () => {
+		const projects = [{ id: "empty", repoUrl: null, defaultNode: "lab", defaultBranch: "main", resources: { cpus: 2, memoryGiB: 4, diskGiB: 10 } }];
+		const { call, calls } = setup({ responses: { projects } });
+		expect(await call("nexus_projects", {})).toEqual(projects);
+		expect(calls()).toEqual([["projects", "--json"]]);
+	});
+
+	test("project add defaults to the first online node and main, returning Project JSON", async () => {
+		const project = { id: "empty", repoUrl: null, defaultNode: "first", defaultBranch: "main" };
+		const { call, calls } = setup({ responses: { nodes: [{ name: "off", state: "offline" }, { name: "first", state: "online" }, { name: "second", state: "online" }], project: project } });
+		expect(await call("nexus_project_add", { id: "empty", scratch: true })).toEqual(project);
+		expect(calls()).toEqual([["nodes", "--json"], ["project", "add", "--json", "--node=first", "--branch=main", "--scratch", "--", "empty"]]);
+	});
+
+	test("project add passes options as values and grants only GitHub's fixed secret hosts", async () => {
+		const project = { id: "repo", repoUrl: "https://github.com/a/b", defaultNode: "lab", defaultBranch: "dev" };
+		const { call, calls } = setup({ responses: { project: project } });
+		expect(await call("nexus_project_add", { id: "--secret=EVIL:evil.example", repo_url: "--secret=GH_TOKEN:evil.example", node: "--scratch", branch: "--secret=EVIL:evil.example", cpus: 4, memory_gib: 8, disk_gib: 20, allow_hosts: ["evil.example", "--secret=GH_TOKEN:evil.example"], logins: ["claude", "chatgpt"], github: true })).toEqual(project);
+		expect(calls()).toEqual([["project", "add", "--json", "--node=--scratch", "--branch=--secret=EVIL:evil.example", "--cpus=4", "--memory=8", "--disk=20", "--allow-host=evil.example", "--allow-host=--secret=GH_TOKEN:evil.example", "--login=claude", "--login=chatgpt", "--secret=GH_TOKEN:api.github.com,github.com", "--", "--secret=EVIL:evil.example", "--secret=GH_TOKEN:evil.example"]]);
+	});
+
+	test("project add refuses ambiguous or missing sources before running the CLI", async () => {
+		for (const params of [{}, { scratch: false }, { repo_url: "url", scratch: true }, { repo_url: " " }]) {
+			const { call, calls } = setup({});
+			expect(await failure(call("nexus_project_add", { id: "repo", ...params }))).toMatch(/exactly one|repo_url is required/);
+			expect(calls()).toEqual([]);
+		}
+		const { call, calls } = setup({ responses: { nodes: [{ name: "off", state: "offline" }] } });
+		expect(await failure(call("nexus_project_add", { id: "repo", repo_url: "url" }))).toContain("no online node");
+		expect(calls()).toEqual([["nodes", "--json"]]);
+	});
+
+	test("project add preserves CLI refusal messages and omits the GitHub grant when false", async () => {
+		const { call, calls } = setup({ fail: { project: { exit: 5, kind: "conflict", error: "project repo already exists" } } });
+		expect(await failure(call("nexus_project_add", { id: "repo", repo_url: "url", scratch: false, node: "lab", github: false }))).toBe("nexus (conflict): project repo already exists");
+		expect(calls()).toEqual([["project", "add", "--json", "--node=lab", "--branch=main", "--", "repo", "url"]]);
+	});
+
+	test("project schemas reject extra secrets, secret hosts and invalid logins", () => {
+		const schema = nexusTools(createNexus()).find((tool) => tool.name === "nexus_project_add")!.parameters;
+		for (const extra of [{ secret: "GH_TOKEN:evil.example" }, { secrets: ["EVIL:evil.example"] }, { secret_hosts: ["evil.example"] }, { logins: ["other"] }]) {
+			expect(Value.Check(schema, { id: "repo", scratch: true, ...extra })).toBe(false);
+		}
 	});
 
 	test("nexus_threads lists threads of a project", async () => {

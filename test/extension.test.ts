@@ -51,8 +51,8 @@ const until = async (check: () => boolean) => {
 };
 
 describe("/nexus", () => {
-	test("registers the eight model tools and no delete or pylon retry", () => {
-		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
+	test("registers the ten model tools and no delete or pylon retry", () => {
+		expect(load({}).tools.sort()).toEqual(["nexus_archive", "nexus_preview", "nexus_project_add", "nexus_projects", "nexus_read", "nexus_send", "nexus_start", "nexus_threads", "nexus_unpublish", "nexus_wait"]);
 	});
 
 	test("unpublish runs nexus unpreview and says so, and an older CLI says to update", async () => {
