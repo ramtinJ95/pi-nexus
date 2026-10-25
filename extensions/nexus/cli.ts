@@ -273,6 +273,9 @@ export async function addModelProject(nexus: Nexus, add: ModelProject, signal?: 
 	try {
 		return parse(Project, await nexus.run(["project add", ...flags, "--", add.id.trim(), ...(add.repo_url !== undefined ? [add.repo_url.trim()] : [])], signal), "nexus project add");
 	} catch (err) {
+		if (err instanceof NexusError && err.kind === "invalid" && /^Unknown option '--(?:scratch|secret)'(?:\.|$)/.test(err.message)) {
+			throw new NexusError("invalid", `${err.message}: adding a project with --scratch or --secret needs Nexus CLI 0.7.0 or later (nexus --version). Update the nexus CLI.`);
+		}
 		throw newer(err, "project add", "adding a project", "0.7.0", true);
 	}
 }

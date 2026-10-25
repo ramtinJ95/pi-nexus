@@ -75,6 +75,24 @@ describe("model tools", () => {
 		expect(await failure(call("nexus_project_add", { id: "repo", scratch: true, node: "lab" }))).toBe("nexus (invalid): nexus has no project add command: adding a project needs Nexus CLI 0.7.0 or later (nexus --version). Update the nexus CLI.");
 	});
 
+	for (const flag of ["scratch", "secret"]) {
+		test(`project add names CLI 0.7.0 when --${flag} is unknown`, async () => {
+			const error = `Unknown option '--${flag}'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--${flag}"`;
+			for (const message of [`Unknown option '--${flag}'`, error]) {
+				const { call } = setup({ fail: { project: { exit: 64, kind: "invalid", error: message } } });
+				const source = flag === "scratch" ? { scratch: true } : { repo_url: "url", github: true };
+				expect(await failure(call("nexus_project_add", { id: "repo", node: "lab", ...source }))).toBe(`nexus (invalid): ${message}: adding a project with --scratch or --secret needs Nexus CLI 0.7.0 or later (nexus --version). Update the nexus CLI.`);
+			}
+		});
+	}
+
+	test("project add preserves unrelated option errors and secret refusals", async () => {
+		for (const error of ["Unknown option '--other'", "Unknown option '--secret-host'", "--secret takes NAME:HOST[,HOST...]"]) {
+			const { call } = setup({ fail: { project: { exit: 64, kind: "invalid", error } } });
+			expect(await failure(call("nexus_project_add", { id: "repo", node: "lab", scratch: true, github: true }))).toBe(`nexus (invalid): ${error}`);
+		}
+	});
+
 	test("project schemas reject extra secrets, secret hosts and invalid logins", () => {
 		const schema = nexusTools(createNexus()).find((tool) => tool.name === "nexus_project_add")!.parameters;
 		for (const extra of [{ secret: "GH_TOKEN:evil.example" }, { secrets: ["EVIL:evil.example"] }, { secret_hosts: ["evil.example"] }, { logins: ["other"] }]) {
