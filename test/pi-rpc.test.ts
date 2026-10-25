@@ -1,7 +1,7 @@
 /** The extension inside a real pi, driven over pi's RPC mode, against the fake nexus binary. */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -13,12 +13,19 @@ afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
 type Line = Record<string, unknown> & { type: string };
 
-function startPi(scenario: Scenario) {
+function startPi(scenario: Scenario, search = false) {
 	const fake = fakeNexus(scenario);
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-nexus-agent-"));
+	if (search) writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultTools: ["read", "bash", "tool_search"] }));
+	const inspector = path.join(agentDir, "inspect.ts");
+	writeFileSync(inspector, `export default function(pi) {
+		pi.registerCommand("inspect-tools", { handler: async (_args, ctx) => {
+			ctx.ui.notify(JSON.stringify({ active: pi.getActiveTools(), tools: pi.getAllTools().filter(t => t.name.startsWith("nexus_")).map(t => ({ name: t.name, exposure: t.exposure })) }), "info");
+		} });
+	}`);
 	const pi = spawn(
 		path.join(root, "node_modules", ".bin", "pi"),
-		["--mode", "rpc", "--no-session", "-ne", "-ns", "-np", "-nc", "--no-themes", "--no-mcp", "-e", path.join(root, "extensions/nexus/index.ts")],
+		["--mode", "rpc", "--no-session", "-ne", "-ns", "-np", "-nc", "--no-themes", "--no-mcp", "-e", path.join(root, "extensions/nexus/index.ts"), "-e", inspector, ...(search ? ["-e", "builtin:tool-search"] : [])],
 		{ cwd: agentDir, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_TELEMETRY: "0", NEXUS_BIN: fake.bin }, stdio: ["pipe", "pipe", "pipe"] },
 	);
 	const lines: Line[] = [];
@@ -50,6 +57,20 @@ const notes = (lines: Line[]) =>
 const notification = (text: string) => (l: Line) => l.type === "extension_ui_request" && l.method === "notify" && l.message === text;
 
 describe("pi-nexus in pi", () => {
+	for (const search of [false, true]) {
+		test(`model tools are ${search ? "deferred with active search" : "direct without active search"} in real pi`, async () => {
+			const pi = startPi({ responses: { threads } }, search);
+			pi.send({ id: "inspect", type: "prompt", message: "/inspect-tools" });
+			const line = await pi.waitFor((line) => line.method === "notify" && typeof line.message === "string" && line.message.startsWith('{"active":'));
+			const result = JSON.parse(line.message as string) as { active: string[]; tools: { name: string; exposure: string }[] };
+			expect(result.tools).toHaveLength(10);
+			for (const tool of result.tools) {
+				expect(tool.exposure).toBe(search ? "deferred" : "direct");
+				expect(result.active.includes(tool.name)).toBe(!search);
+			}
+		}, 30_000);
+	}
+
 	test("the status line shows from the session's start, before any /nexus", async () => {
 		const pi = startPi({ responses: { threads } });
 		pi.send({ id: "1", type: "get_state" });

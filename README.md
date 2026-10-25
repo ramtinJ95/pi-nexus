@@ -106,6 +106,7 @@ Every failure is shown as an error notification with the CLI's message. When the
 
 ## Model tools
 
+Nexus tools are deferred: pi declares them to the model only after its builtin `tool_search` finds them. Search for `nexus`, `thread`, `pylon` or `project`. If that builtin is missing, replaced or inactive, the tools fall back to direct exposure so they remain discoverable.
 
 | Tool | Parameters | Result |
 | --- | --- | --- |

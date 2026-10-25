@@ -363,20 +363,38 @@ export default function nexusExtension(
 ) {
 	const session = new NexusSession(pi, nexus, display, stores);
 	pi.registerEntryRenderer(noteType, renderNote);
-	for (const tool of nexusTools(nexus)) {
-		pi.registerTool({
-			...tool,
-			async execute(toolCallId, params, signal, onUpdate, ctx) {
-				session.attach(ctx.ui);
-				try {
-					const owned = signal ? AbortSignal.any([signal, session.closed.signal]) : session.closed.signal;
-					return await tool.execute(toolCallId, params, owned, onUpdate, ctx);
-				} finally {
-					void session.refresh();
-				}
-			},
-		});
-	}
+	let exposure: "deferred" | "direct" = "deferred";
+	const registerTools = () => {
+		for (const tool of nexusTools(nexus)) {
+			pi.registerTool({
+				...tool,
+				exposure,
+				async execute(toolCallId, params, signal, onUpdate, ctx) {
+					session.attach(ctx.ui);
+					try {
+						const owned = signal ? AbortSignal.any([signal, session.closed.signal]) : session.closed.signal;
+						return await tool.execute(toolCallId, params, owned, onUpdate, ctx);
+					} finally {
+						void session.refresh();
+					}
+				},
+			});
+		}
+	};
+	registerTools();
+	const reconcileDiscovery = () => {
+		// Builtins load after extensions; an inactive or replaced search cannot discover our tools.
+		const searchable = pi.getAllTools?.().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search")
+			&& pi.getActiveTools().includes("tool_search");
+		const next = searchable ? "deferred" : "direct";
+		if (next !== exposure) {
+			exposure = next;
+			registerTools();
+		}
+	};
+	pi.on("before_agent_start", reconcileDiscovery);
+	pi.on("session_tree", reconcileDiscovery);
+	pi.on("model_select", reconcileDiscovery);
 	pi.registerCommand("nexus", {
 		description: "Drive Nexus threads: list, new, send, show, follow, archive, delete and more",
 		getArgumentCompletions: (prefix) => complete(prefix, session.threads),
@@ -395,6 +413,7 @@ export default function nexusExtension(
 	});
 	// Print and JSON modes have no status line or widgets to fill.
 	pi.on("session_start", (_event, ctx) => {
+		reconcileDiscovery();
 		if (ctx.hasUI) session.start(ctx.ui);
 	});
 	pi.on("session_shutdown", () => session.shutdown());
