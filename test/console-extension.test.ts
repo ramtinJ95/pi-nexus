@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { addProject, createNexus, listProjects, listThreads, openSession, showThread } from "../extensions/nexus/cli.ts";
-import { shellQuote, sshHint } from "../extensions/nexus/console/model.ts";
+import { shellQuote } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
 import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
@@ -368,16 +368,17 @@ describe("console", () => {
 		expect(n.calls()).toContainEqual(["attach", "--json", idA]);
 		expect(n.shown[0]!.tui.events).toEqual(["stop", `write Attaching to the sessions of ${idA} with ${shellQuote(n.bin)} attach ${idA}. Detach from Herdr to come back to pi.\n`, "start", "redraw"]);
 		expect(n.notified).toContainEqual([`Detached from the sessions of ${idA}.`, "info"]);
-		const old = load({ ...scenario, fail: { attach: { exit: 64, kind: "invalid", error: "unknown command attach" } } });
+		const old = load({ ...scenario, version: "0.8.0" });
 		await old.run(`session attach ${idA}`);
 		expect(old.shown[0]!.tui.events.at(-2)).toBe("start");
-		expect(old.notified).toContainEqual(["nexus: nexus has no attach command: attaching needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+		expect(old.calls().some((c) => c[0] === "attach")).toBe(false);
+		expect(old.notified.at(-1)).toEqual([`nexus: ${old.bin} is 0.8.0: attaching needs Nexus CLI 0.9.0 or later (nexus --version)`, "error"]);
 		const stopped = load({ ...scenario, attachSignal: "SIGINT" });
 		await stopped.run(`session attach ${idA}`);
 		expect(stopped.notified).toContainEqual(["nexus: nexus attach stopped on SIGINT", "error"]);
 		const rpc = load(scenario, { custom: false });
 		await rpc.run(`session attach ${idA}`);
-		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${shellQuote(rpc.bin)} attach ${idA}\n\n${sshHint}` }]);
+		expect(rpc.notes).toEqual([{ title: `attach to ${idA}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${shellQuote(rpc.bin)} attach ${idA}\n\nAttaching needs Nexus CLI 0.9.0 or newer and goes through the control plane.` }]);
 	});
 
 	test("/nexus opens on the working thread with the picker under it, so h goes back to the picker and q closes", async () => {

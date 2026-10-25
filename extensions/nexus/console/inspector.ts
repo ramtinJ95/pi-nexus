@@ -9,6 +9,7 @@ import type { NodeSummary, Session, ThreadDetail, ThreadStatus } from "../contra
 import {
 	ago,
 	attachCommand,
+	attachHint,
 	badge,
 	desiredTone,
 	harnessLabel,
@@ -19,7 +20,6 @@ import {
 	sessionLook,
 	sessionName,
 	shownOutputs,
-	sshHint,
 	toneColor,
 	type PortChange,
 	type SessionChanges,
@@ -135,7 +135,7 @@ export function sessionLines(
 	w.heading("Attach from this Mac");
 	lines.push(`   ${t.fg("mdCode", attachCommand(cli, detail.thread.id))}`);
 	w.wrapped("enter runs it here, and y copies it. Each session is a workspace in the pylon's Herdr: pick one there, and detach from Herdr to come back.", "dim");
-	w.wrapped(sshHint, "dim");
+	w.wrapped(attachHint, "dim");
 	return { lines: w.done(), rows };
 }
 

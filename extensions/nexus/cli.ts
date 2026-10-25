@@ -127,8 +127,8 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 
 		attach(thread) {
 			return new Promise((resolve, reject) => {
-				// The terminal is the CLI's, then ssh's. Its stderr goes on to the terminal as it comes, so ssh's prompts
-				// show, and its tail is kept, so a failure reads as the CLI's own.
+				// The terminal is the CLI's, then Herdr's. Its stderr goes on to the terminal as it comes, so the CLI's
+				// waiting lines show, and its tail is kept, so a failure reads as the CLI's own.
 				const child = spawn(bin, ["attach", "--json", thread], { stdio: ["inherit", "inherit", "pipe"] });
 				let stderr = "";
 				child.stderr.on("data", (chunk: Buffer) => {
@@ -138,7 +138,7 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 				child.on("error", (err) => reject(spawnFailure(bin, err)));
 				child.on("close", (code, signal) => {
 					if (code === 0) resolve();
-					// Ctrl+C before ssh takes the terminal stops the CLI by signal, with no line of its own.
+					// Ctrl+C before Herdr takes the terminal stops the CLI by signal, with no line of its own.
 					else if (signal !== null) reject(new NexusError("failed", `nexus attach stopped on ${signal}`));
 					else reject(failure(code, stderr));
 				});
@@ -308,14 +308,12 @@ export async function closeSession(nexus: Nexus, thread: string, id: string, sig
 
 /**
  * Gives this process's terminal to the pylon's Herdr session, through `nexus attach`, until the person detaches.
- * The caller must have released the terminal first. It needs CLI 0.5.0.
+ * The caller must have released the terminal first. It needs CLI 0.9.0, which attaches through the control plane; an
+ * older one attaches over ssh, which upgraded nodes refuse.
  */
 export async function attachThread(nexus: Nexus, thread: string): Promise<void> {
-	try {
-		await nexus.attach(thread);
-	} catch (err) {
-		throw newer(err, "attach", "attaching", "0.5.0");
-	}
+	await requireVersion(nexus, [0, 9, 0], "attaching");
+	await nexus.attach(thread);
 }
 export const listNodes = async (nexus: Nexus, signal?: AbortSignal) => parse(Type.Array(NodeSummary), await nexus.run(["nodes"], signal), "nexus nodes");
 

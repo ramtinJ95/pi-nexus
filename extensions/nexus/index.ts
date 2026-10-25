@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
-import { attachCommand, chips, noteParked, pausedRefusal, sessionLook, sessionName, sessionPlace, sshHint, summary, type Parked } from "./console/model.ts";
+import { attachCommand, attachHint, chips, noteParked, pausedRefusal, sessionLook, sessionName, sessionPlace, summary, type Parked } from "./console/model.ts";
 import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
@@ -288,7 +288,7 @@ class NexusSession {
 				const thread = await id(command.thread);
 				if (await this.console.attach(ctx.ui, thread)) return ctx.ui.notify(`Detached from the sessions of ${thread}.`, "info");
 				// Without a terminal to give, as in RPC mode, the person runs the command in one.
-				return this.note({ title: `attach to ${thread}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${attachCommand(this.nexus.bin, thread)}\n\n${sshHint}` });
+				return this.note({ title: `attach to ${thread}`, body: `This pi has no terminal to give, so run this in one:\n\n  ${attachCommand(this.nexus.bin, thread)}\n\n${attachHint}` });
 			}
 			case "unpublish": {
 				const thread = await id(command.thread);
