@@ -67,8 +67,8 @@ export const Preview = Type.Object({
 	/** The node publishes it and has warmed its URL, and `failed` is null. It says nothing else about the pylon answering. */
 	ready: Type.Boolean(),
 	/**
-	 * Why it cannot answer: the pylon's node last reported its service failed. Null otherwise, and absent from a control
-	 * plane older than the field, which means null too.
+	 * Why it cannot answer: the pylon's node last reported its service failed, or its port without a route into the
+	 * pylon. Null otherwise, and absent from a control plane older than the field, which means null too.
 	 */
 	failed: Type.Optional(Nullable(Type.String())),
 	url: Type.String(),

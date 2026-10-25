@@ -9,6 +9,7 @@ import type { NodeSummary, Session, ThreadDetail, ThreadStatus } from "../contra
 import {
 	ago,
 	attachCommand,
+	attachHint,
 	badge,
 	desiredTone,
 	harnessLabel,
@@ -19,9 +20,7 @@ import {
 	sessionLook,
 	sessionName,
 	shownOutputs,
-	sshHint,
 	toneColor,
-	unreachableHint,
 	type PortChange,
 	type SessionChanges,
 	type Tone,
@@ -136,7 +135,7 @@ export function sessionLines(
 	w.heading("Attach from this Mac");
 	lines.push(`   ${t.fg("mdCode", attachCommand(cli, detail.thread.id))}`);
 	w.wrapped("enter runs it here, and y copies it. Each session is a workspace in the pylon's Herdr: pick one there, and detach from Herdr to come back.", "dim");
-	w.wrapped(sshHint, "dim");
+	w.wrapped(attachHint, "dim");
 	return { lines: w.done(), rows };
 }
 
@@ -205,7 +204,7 @@ export function portLines(
 	if (ports === null) lines.push(`   ${t.fg("dim", "The pylon's ports could not be read.")}`);
 	else if (unpublished.length === 0) {
 		if (detail.pylon.actualState !== "running") lines.push(`   ${t.fg("dim", "Ports show while the pylon runs.")}`);
-		else w.wrapped(`${ports.length === 0 ? "Nothing listens yet." : "Every port that listens is under Previews."} ${unreachableHint}`, "dim");
+		else w.wrapped(`${ports.length === 0 ? "Nothing listens yet." : "Every port that listens is under Previews."}`, "dim");
 	}
 	for (const { port: p, i } of unpublished) {
 		row(i, () => {

@@ -38,8 +38,7 @@ export const harnessLabel: Readonly<Record<string, string>> = { "claude-code": "
 export const attachCommand = (cli: string, thread: string) => `${shellQuote(cli)} attach ${shellQuote(thread)}`;
 /** `word` as one word to a POSIX shell or zsh: bare when nothing in it is special, else single-quoted. */
 export const shellQuote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
-/** How to reach a pylon's node when ssh cannot as it is, which the CLI's own failure repeats. */
-export const sshHint = `Attaching needs Nexus CLI 0.5.0 and ssh to the pylon's node. When ssh needs another user or an alias for the node, set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json, or NEXUS_ATTACH, as the CLI's docs/cli.md describes.`;
+export const attachHint = "Attaching needs Nexus CLI 0.9.0 or newer and goes through the control plane.";
 
 /** A session as a person names it: its harness, and its title when it has one, such as `Claude Code "login"`. */
 export const sessionName = (harness: string, title: string | null | undefined) =>
@@ -638,15 +637,12 @@ export function portAction(
 	return { kind: "unpublish", port: own };
 }
 
-/** The preview reaches only the pylon's 127.0.0.1, so a server bound only to ::1 is neither listed nor reachable. */
-export const unreachableHint = "A server bound only to ::1 can't be previewed, so bind it to 0.0.0.0 or 127.0.0.1.";
-
 export type PreviewLook = { linked: boolean; label: string | null; tone: Tone; hint: string | null };
 
 /**
  * A paused pylon's preview keeps its link, because a visit wakes the pylon. An archived thread's pylon stays paused
- * whatever the visit, so its preview would only show the waking page. A failed service's preview has no link, because
- * the gateway can only answer 502 for it, and its hint is why the service failed.
+ * whatever the visit, so its preview would only show the waking page. A failed preview, whose service failed or whose
+ * port has no route into the pylon, has no link, because its URL cannot reach the server, and its hint is why.
  */
 export function previewLook(detail: ThreadDetail, preview: Pick<Preview, "ready" | "failed">): PreviewLook {
 	if (detail.thread.status === "archived") return { linked: false, label: "paused", tone: "idle", hint: "Unarchive the thread to open it." };

@@ -537,7 +537,8 @@ describe("thread view", () => {
 		expect(out).toContain("1 Conversation   2 Changes   3 Previews 1   4 Pylon");
 		expect(out).toMatch(/Sessions 3\n → Claude Code  login fix  ● idle  %5  session sid-1\n     enter or \/attach attaches this terminal, x closes the session\n +pi +● working  %3  session abc\n +Shell +● unknown  %9\n/);
 		expect(out).toContain("Attach from this Mac\n   nexus attach th-0123456789ab\n   enter runs it here, and y copies it.");
-		expect(out).toContain('set "ssh": {"<node>": "<user@host or alias>"} in ~/.config/nexus/cli.json');
+		expect(out.replace(/\s+/g, " ")).toContain("Attaching needs Nexus CLI 0.9.0 or newer and goes through the control plane.");
+		expect(out).not.toContain("ssh");
 		expect(out).toMatch(/NORMAL  i write  j\/k select  enter attach  x close  n open  y copy/);
 		s.press("j");
 		expect(s.text()).toMatch(/→ pi +● working  %3  session abc\n     enter or \/attach/);
@@ -783,7 +784,7 @@ describe("thread view", () => {
 		s.normal("y");
 		await s.settle();
 		expect(s.copied).toEqual(["nexus attach th-0123456789ab"]);
-		const why = 'attaching to th-0123456789ab on firebat failed: ssh to firebat.example exited 255. To reach the node as another user or through an ssh alias, set "ssh": {"firebat": "<user@host or alias>"} in ~/.config/nexus/cli.json, or set NEXUS_ATTACH, as docs/cli.md describes';
+		const why = "the connection to the control plane dropped. Herdr keeps the session, so `nexus attach th-0123456789ab` again";
 		const failed = open(undefined, { attachFails: new Error(why) });
 		failed.normal("m", ..."jjjjj", keys.enter);
 		await failed.settle();
@@ -831,8 +832,9 @@ describe("thread view", () => {
 			return plain(s.screen.render(160));
 		};
 		const none = inspect({ ...detail, ports: [] });
-		expect(none).toContain("Nothing listens yet. A server bound only to ::1 can't be previewed, so bind it to 0.0.0.0 or 127.0.0.1.");
-		expect(inspect({ ...detail, ports: ports.slice(0, 1) })).toContain("Every port that listens is under Previews. A server bound only to ::1");
+		expect(none).toMatch(/Nothing listens yet\. *\n/);
+		expect(none).not.toContain("::1");
+		expect(inspect({ ...detail, ports: ports.slice(0, 1) })).toMatch(/Every port that listens is under Previews\. *\n/);
 		expect(inspect({ ...detail, ports: null })).toContain("The pylon's ports could not be read.");
 		expect(inspect({ ...detail, pylon: { ...detail.pylon, actualState: "paused" }, ports: [] })).toContain("Ports show while the pylon runs.");
 		const owned = inspect({ ...detail, ports: [...ports, { port: 9000, service: "api", preview: null }] });
