@@ -724,7 +724,7 @@ describe("thread view", () => {
 		// A later shell in pane %3 is another session, which shows.
 		const later: Session = { id: "%3", state: "running", message: null, harness: "shell", herdrPane: "%3", status: "unknown", harnessSessionId: null, title: "scratch" };
 		s.details({ ...withSessions, sessions: [withSessions.sessions[0]!, later] });
-		expect(s.text()).toMatch(/Shell +scratch  ● unknown  %3/);
+		expect(s.text()).toMatch(/Shell +scratch    ● unknown  %3/);
 	});
 
 	test("a later session in a closed session's pane with its harness and title, but another harness session, shows at once", async () => {

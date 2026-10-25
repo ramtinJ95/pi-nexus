@@ -4,7 +4,7 @@
  * section while it has one, in the Ports section otherwise.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { NodeSummary, Session, ThreadDetail, ThreadStatus } from "../contract.ts";
 import {
 	ago,
@@ -111,14 +111,18 @@ export function sessionLines(
 	w.heading("Sessions", sessions.length);
 	if (sessions.length === 0 && changes.opening.length === 0) lines.push(`   ${t.fg("dim", "No sessions. n opens one: Claude Code, pi or a shell.")}`);
 	const thread = detail.thread.status;
+	const harnessWidth = Math.max(0, ...sessions.map((s) => visibleWidth(harnessLabel[s.harness] ?? s.harness)));
+	const titleWidth = Math.max(0, ...sessions.map((s) => visibleWidth(s.title ?? "")));
+	const pad = (text: string, columns: number) => text + " ".repeat(columns - visibleWidth(text));
 	for (const [i, s] of sessions.entries()) {
 		const first = lines.length;
 		const closing = changes.closing.has(s.id);
 		const [status, tone]: [string, Tone] = closing ? ["closing...", "busy"] : sessionLook(s, thread);
-		const title = s.title ? `${t.bold(s.title)}  ` : "";
+		const harness = pad(harnessLabel[s.harness] ?? s.harness, harnessWidth);
+		const title = titleWidth > 0 ? `${t.bold(pad(s.title ?? "", titleWidth))}  ` : "";
 		const id = s.harnessSessionId ? t.fg("dim", `  session ${s.harnessSessionId}`) : "";
 		// A failed session in no pane shows the ID that closes it.
-		lines.push(`${mark(i)}${(harnessLabel[s.harness] ?? s.harness).padEnd(12)} ${title}${w.dot(tone)} ${status}  ${t.fg("dim", s.herdrPane ?? s.id)}${id}`);
+		lines.push(`${mark(i)}${harness}  ${title}${w.dot(tone)} ${status}  ${t.fg("dim", s.herdrPane ?? s.id)}${id}`);
 		// The selected row's message shows whole, such as the pane's screen when its agent did not start.
 		if (s.state === "failed" && !closing) w.wrapped(i === selected ? s.message : s.message.split("\n")[0]!, "error", 5);
 		if (i === selected && !closing) lines.push(`     ${t.fg("dim", sessionHint(s, thread))}`);
