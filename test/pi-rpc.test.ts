@@ -13,19 +13,27 @@ afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
 type Line = Record<string, unknown> & { type: string };
 
-function startPi(scenario: Scenario, search = false) {
+function startPi(scenario: Scenario, search: boolean | "inactive" = false) {
 	const fake = fakeNexus(scenario);
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "pi-nexus-agent-"));
-	if (search) writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultTools: ["read", "bash", "tool_search"] }));
+	if (search) writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultTools: ["read", "bash", search === "inactive" ? "nexus_read" : "tool_search"] }));
 	const inspector = path.join(agentDir, "inspect.ts");
 	writeFileSync(inspector, `export default function(pi) {
+		pi.registerProvider("discovery-test", {
+			baseUrl: "http://127.0.0.1:9", apiKey: "test", api: "openai-completions",
+			models: ["a", "b"].map(id => ({ id, name: id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 }))
+		});
+		pi.registerCommand("search-active", { handler: async (args) => {
+			const active = pi.getActiveTools().filter(name => name !== "tool_search");
+			pi.setActiveTools(args === "on" ? [...active, "tool_search"] : active);
+		} });
 		pi.registerCommand("inspect-tools", { handler: async (_args, ctx) => {
 			ctx.ui.notify(JSON.stringify({ active: pi.getActiveTools(), tools: pi.getAllTools().filter(t => t.name.startsWith("nexus_")).map(t => ({ name: t.name, exposure: t.exposure })) }), "info");
 		} });
 	}`);
 	const pi = spawn(
 		path.join(root, "node_modules", ".bin", "pi"),
-		["--mode", "rpc", "--no-session", "-ne", "-ns", "-np", "-nc", "--no-themes", "--no-mcp", "-e", path.join(root, "extensions/nexus/index.ts"), "-e", inspector, ...(search ? ["-e", "builtin:tool-search"] : [])],
+		["--mode", "rpc", "--no-session", "-ne", "-ns", "-np", "-nc", "--no-themes", "--no-mcp", "-e", path.join(root, "extensions/nexus/index.ts"), "-e", inspector, ...(search ? ["-e", "builtin:tool-search"] : []), ...(search === "inactive" ? ["--model", "discovery-test/b"] : [])],
 		{ cwd: agentDir, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_TELEMETRY: "0", NEXUS_BIN: fake.bin }, stdio: ["pipe", "pipe", "pipe"] },
 	);
 	const lines: Line[] = [];
@@ -70,6 +78,43 @@ describe("pi-nexus in pi", () => {
 			}
 		}, 30_000);
 	}
+
+	test("re-enabling search removes fallback activations but keeps the person's tools in real pi", async () => {
+		const pi = startPi({ responses: { threads } }, "inactive");
+		let sequence = 0;
+		const command = async (message: string) => {
+			const id = String(++sequence);
+			pi.send({ id, type: "prompt", message });
+			await pi.waitFor((line) => line.id === id && line.type === "response");
+		};
+		const inspect = async () => {
+			const start = pi.lines.length;
+			await command("/inspect-tools");
+			const line = await pi.waitFor((line) => pi.lines.indexOf(line) >= start && line.method === "notify" && typeof line.message === "string" && line.message.startsWith('{"active":'));
+			return JSON.parse(line.message as string) as { active: string[]; tools: { name: string; exposure: string }[] };
+		};
+		const reconcile = async (modelId: string) => {
+			const id = String(++sequence);
+			pi.send({ id, type: "set_model", provider: "discovery-test", modelId });
+			const response = await pi.waitFor((line) => line.id === id && line.type === "response");
+			expect(response.success).toBe(true);
+		};
+		const direct = await inspect();
+		expect(direct.tools).toHaveLength(10);
+		expect(direct.tools.every((tool) => tool.exposure === "direct" && direct.active.includes(tool.name))).toBe(true);
+		for (let cycle = 0; cycle < 2; cycle++) {
+			await command("/search-active on");
+			await reconcile("a");
+			const deferred = await inspect();
+			expect(deferred.tools.every((tool) => tool.exposure === "deferred")).toBe(true);
+			expect(deferred.active.filter((name) => name.startsWith("nexus_"))).toEqual(["nexus_read"]);
+			expect(deferred.active).toEqual(expect.arrayContaining(["read", "bash", "tool_search"]));
+			await command("/search-active off");
+			await reconcile("b");
+			const fallback = await inspect();
+			expect(fallback.tools.every((tool) => tool.exposure === "direct" && fallback.active.includes(tool.name))).toBe(true);
+		}
+	}, 30_000);
 
 	test("the status line shows from the session's start, before any /nexus", async () => {
 		const pi = startPi({ responses: { threads } });

@@ -364,8 +364,10 @@ export default function nexusExtension(
 	const session = new NexusSession(pi, nexus, display, stores);
 	pi.registerEntryRenderer(noteType, renderNote);
 	let exposure: "deferred" | "direct" = "deferred";
+	let fallbackActivated = new Set<string>();
+	const tools = nexusTools(nexus);
 	const registerTools = () => {
-		for (const tool of nexusTools(nexus)) {
+		for (const tool of tools) {
 			pi.registerTool({
 				...tool,
 				exposure,
@@ -388,8 +390,16 @@ export default function nexusExtension(
 			&& pi.getActiveTools().includes("tool_search");
 		const next = searchable ? "deferred" : "direct";
 		if (next !== exposure) {
+			const active = pi.getActiveTools?.() ?? [];
 			exposure = next;
 			registerTools();
+			if (next === "direct") {
+				fallbackActivated = new Set((pi.getActiveTools?.() ?? []).filter((name) => tools.some((tool) => tool.name === name) && !active.includes(name)));
+			} else {
+				// Re-registering as deferred preserves pi's active set. Undo only our fallback's additions.
+				if (fallbackActivated.size > 0) pi.setActiveTools(active.filter((name) => !fallbackActivated.has(name)));
+				fallbackActivated.clear();
+			}
 		}
 	};
 	pi.on("before_agent_start", reconcileDiscovery);

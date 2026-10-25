@@ -106,7 +106,7 @@ Every failure is shown as an error notification with the CLI's message. When the
 
 ## Model tools
 
-Nexus tools are deferred: pi declares them to the model only after its builtin `tool_search` finds them. Search for `nexus`, `thread`, `pylon` or `project`. If that builtin is missing, replaced or inactive, the tools fall back to direct exposure so they remain discoverable.
+Nexus tools are deferred: pi declares them to the model only after its builtin `tool_search` finds them. Search for `nexus`, `thread`, `pylon` or `project`. If that builtin is missing, replaced or inactive, the tools fall back to direct exposure so they remain discoverable. When search becomes active again, only tools activated by that fallback are removed from the active set; tools already active before it stay active.
 
 | Tool | Parameters | Result |
 | --- | --- | --- |
@@ -121,7 +121,7 @@ Nexus tools are deferred: pi declares them to the model only after its builtin `
 | `nexus_unpublish` | `thread`, `port` (1 to 65535) | `{thread, port, unpublished: true}`, once the preview is closed, up to 2 minutes while a paused pylon wakes. A port with no preview succeeds too. A declared or ad hoc service's preview fails with the CLI's refusal. Publishing the port again may give it a new URL |
 | `nexus_archive` | `thread` | `{thread, status: "archived"}` |
 
-`nexus_project_add` needs Nexus CLI 0.7.0 or later, which added `--scratch` and `--secret`. `github: true` grants only `GH_TOKEN` to `api.github.com` and `github.com`, like the dashboard's GitHub access checkbox. No other secret name or secret hosts can be supplied; `allow_hosts` allows network access without granting credentials. Resource defaults are the CLI's. If no node is online, specify `node` explicitly or bring one online.
+`nexus_project_add` needs Nexus CLI 0.7.0 or later, which added `--scratch` and `--secret`. `github: true` grants only `GH_TOKEN` to `api.github.com` and `github.com`, like the dashboard's GitHub access checkbox. No other secret name or secret hosts can be supplied; `allow_hosts` allows network access without granting credentials. A CLI without `project add` gets an error asking to update to CLI 0.7.0 or later. Resource defaults are the CLI's. If no node is online, specify `node` explicitly or bring one online.
 
 Results are compact JSON. A failure is a failed tool call whose text reads `nexus (<kind>): <the CLI's message>`, where the kind is the CLI's, such as `unreachable` or `not-found`.
 
