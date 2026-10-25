@@ -451,7 +451,7 @@ export class Console {
 				preview: (port) => previewPort(nexus, thread, port, signal),
 				unpublish: (port) => unpreviewPort(nexus, thread, port, signal),
 				openSession: (harness, title) => openSession(nexus, thread, { harness, ...(title === undefined ? {} : { title }) }, signal),
-				closeSession: (pane) => closeSession(nexus, thread, pane, signal),
+				closeSession: (id) => closeSession(nexus, thread, id, signal),
 				attach: () => attached(nexus, tui, thread),
 				refresh: () => void refreshDetail(),
 				rewatch: () => watch(),

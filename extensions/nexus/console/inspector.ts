@@ -5,7 +5,7 @@
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { NodeSummary, Session, ThreadDetail } from "../contract.ts";
+import type { NodeSummary, Session, ThreadDetail, ThreadStatus } from "../contract.ts";
 import {
 	ago,
 	attachCommand,
@@ -16,8 +16,8 @@ import {
 	noChange,
 	portRows,
 	previewLook,
+	sessionLook,
 	sessionName,
-	sessionTone,
 	shownOutputs,
 	sshHint,
 	toneColor,
@@ -79,6 +79,14 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	return w.done();
 }
 
+/** What the selected session's keys do. Attaching wakes a paused pylon, but not an archived thread's. */
+function sessionHint(s: Session, thread: ThreadStatus): string {
+	if (s.state === "running") return "enter or /attach attaches this terminal, x closes the session";
+	if (s.state === "failed") return "enter or /attach attaches this terminal, x closes the session so that no wake tries it again";
+	if (thread === "archived") return "/unarchive brings it back, and it can be closed once it runs";
+	return "enter or /attach wakes the pylon and attaches this terminal. It can be closed once it runs";
+}
+
 /**
  * The sessions, one row each in `sessions`' order, the `selected` one marked and named in the hints, then the opens
  * under way and how to attach from this Mac. `rows` holds each row's first and last line, as portLines does.
@@ -102,14 +110,18 @@ export function sessionLines(
 
 	w.heading("Sessions", sessions.length);
 	if (sessions.length === 0 && changes.opening.length === 0) lines.push(`   ${t.fg("dim", "No sessions. n opens one: Claude Code, pi or a shell.")}`);
+	const thread = detail.thread.status;
 	for (const [i, s] of sessions.entries()) {
 		const first = lines.length;
-		const closing = changes.closing.has(s.herdrPane);
-		const [status, tone]: [string, Tone] = closing ? ["closing...", "busy"] : [s.status, sessionTone[s.status] ?? "muted"];
+		const closing = changes.closing.has(s.id);
+		const [status, tone]: [string, Tone] = closing ? ["closing...", "busy"] : sessionLook(s, thread);
 		const title = s.title ? `${t.bold(s.title)}  ` : "";
 		const id = s.harnessSessionId ? t.fg("dim", `  session ${s.harnessSessionId}`) : "";
-		lines.push(`${mark(i)}${(harnessLabel[s.harness] ?? s.harness).padEnd(12)} ${title}${w.dot(tone)} ${status}  ${t.fg("dim", s.herdrPane)}${id}`);
-		if (i === selected && !closing) lines.push(`     ${t.fg("dim", "enter or /attach attaches this terminal, x closes the session")}`);
+		// A failed session in no pane shows the ID that closes it.
+		lines.push(`${mark(i)}${(harnessLabel[s.harness] ?? s.harness).padEnd(12)} ${title}${w.dot(tone)} ${status}  ${t.fg("dim", s.herdrPane ?? s.id)}${id}`);
+		// The selected row's message shows whole, such as the pane's screen when its agent did not start.
+		if (s.state === "failed" && !closing) w.wrapped(i === selected ? s.message : s.message.split("\n")[0]!, "error", 5);
+		if (i === selected && !closing) lines.push(`     ${t.fg("dim", sessionHint(s, thread))}`);
 		rows[i] = [first, lines.length - 1];
 	}
 	for (const o of changes.opening) {

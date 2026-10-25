@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import nexusExtension from "../extensions/nexus/index.ts";
-import { createNexus, type Nexus } from "../extensions/nexus/cli.ts";
+import { createNexus, isOlder, parseVersion, type Nexus } from "../extensions/nexus/cli.ts";
 import { detail, memoryStores } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, idA, idB, idle, reset, state, thread, threads, user, working, type Scenario } from "./fixtures.ts";
 
@@ -80,15 +80,16 @@ describe("/nexus", () => {
 		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session open command: opening a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
 	});
 
-	test("session close closes the pane given, or asks which with Keep them all first", async () => {
+	test("session close closes the session given by its pane or ID, or asks which with Keep them all first", async () => {
 		const n = load({ responses: { threads, "session close": null } });
 		await n.run(`session close ${idA} %3`);
 		expect(n.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%3"]);
-		expect(n.notified).toEqual([[`Closed pane %3 of ${idA}.`, "info"]]);
+		expect(n.notified).toEqual([[`Closed session %3 of ${idA}.`, "info"]]);
+		// A control plane older than session states lists sessions without state, ID or message, which read as running in their pane.
 		const sessions = [{ ...detail.sessions[0]!, title: "review" }, { harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: null }];
 		const asking = load({ responses: { threads, show: { ...detail, sessions }, "session close": null } }, { answer: "Claude Code in pane %5, idle" });
 		await asking.run(`session close ${idA}`);
-		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? Its agent ends.`, options: ["Keep them all", 'pi "review" in pane %3, working', "Claude Code in pane %5, idle"] }]);
+		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? A running one's agent ends.`, options: ["Keep them all", 'pi "review" in pane %3, working', "Claude Code in pane %5, idle"] }]);
 		expect(asking.calls()).toContainEqual(["session", "close", "--json", "--", idA, "%5"]);
 		const kept = load({ responses: { threads, show: { ...detail, sessions } } }, { answer: undefined });
 		await kept.run(`session close ${idA}`);
@@ -100,6 +101,64 @@ describe("/nexus", () => {
 		const old = load({ responses: { threads }, fail: { "session close": { exit: 64, kind: "invalid", error: "unknown command session" } } });
 		await old.run(`session close ${idA} %3`);
 		expect(old.notified.at(-1)).toEqual(["nexus: nexus has no session close command: closing a session needs Nexus CLI 0.5.0 or later (nexus --version)", "error"]);
+	});
+
+	test("session close never offers a paused session, offers a failed one with why, and closes it by its ID", async () => {
+		const paused = { ...detail.sessions[0]!, id: "w1:p1", herdrPane: "w1:p1", state: "paused", title: "review" };
+		const failed = { ...detail.sessions[0]!, id: "failed-0123456789ab", herdrPane: null, harnessSessionId: "/s.jsonl", state: "failed", title: "plan", message: "herdr agent start: the agent did not start.\nThe pane showed:\n$" };
+		const label = 'pi "plan" in session failed-0123456789ab, failed: herdr agent start: the agent did not start.';
+		const asking = load({ responses: { threads, show: { ...detail, sessions: [paused, failed] }, "session close": null } }, { answer: label });
+		await asking.run(`session close ${idA}`);
+		expect(asking.asked).toEqual([{ title: `Close which session of ${idA}? A running one's agent ends.`, options: ["Keep them all", label] }]);
+		expect(asking.calls()).toContainEqual(["session", "close", "--json", "--", idA, "failed-0123456789ab"]);
+		expect(asking.notified).toEqual([[`Closed session failed-0123456789ab of ${idA}.`, "info"]]);
+		// With only paused sessions there is nothing to ask, and nothing is sent.
+		const archived = { ...detail, thread: { ...detail.thread, status: "archived" }, sessions: [paused] };
+		const onlyPaused = load({ responses: { threads, show: archived } });
+		await onlyPaused.run(`session close ${idA}`);
+		expect(onlyPaused.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(onlyPaused.notified).toEqual([[`${idA} has no session to close: pi "review" is paused with the pylon and resumes on unarchive. Close it once it runs.`, "info"]]);
+	});
+
+	test("session close shows the CLI's refusal of a paused session, and of a pane a wake moved, in its words", async () => {
+		const refusal = `session w1:p1 is paused with its pylon and resumes when its pylon wakes. Close it once it runs`;
+		const n = load({ responses: { threads }, fail: { "session close": { exit: 5, kind: "conflict", error: refusal } } });
+		await n.run(`session close ${idA} w1:p1`);
+		expect(n.calls().filter((c) => c[0] === "session")).toHaveLength(1);
+		expect(n.notified.at(-1)).toEqual([`nexus: ${refusal}`, "error"]);
+		const moved = "no session is open in pane w1:p1 of pylon py-0123. A wake may have moved it to another pane, which the thread's sessions list";
+		const gone = load({ responses: { threads }, fail: { "session close": { exit: 4, kind: "not-found", error: moved } } });
+		await gone.run(`session close ${idA} w1:p1`);
+		expect(gone.notified.at(-1)).toEqual([`nexus: ${moved}`, "error"]);
+	});
+
+	test("session close needs CLI 0.8.0, refused before it runs on an older one, and a new enough version is read once", async () => {
+		const old = load({ responses: { threads, "session close": null }, version: "0.7.0" });
+		await old.run(`session close ${idA} w1:p1`);
+		expect(old.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(old.notified.at(-1)![0]).toEndWith(" is 0.7.0: closing a session needs Nexus CLI 0.8.0 or later (nexus --version)");
+		// Each refusal reads the version again, so a CLI updated meanwhile is not refused from memory.
+		await old.run(`session close ${idA} w1:p1`);
+		expect(old.calls().filter((c) => c[0] === "--version")).toHaveLength(2);
+		const unreadable = load({ responses: { threads }, version: "dev" });
+		await unreadable.run(`session close ${idA} w1:p1`);
+		expect(unreadable.calls().some((c) => c[0] === "session")).toBe(false);
+		expect(unreadable.notified.at(-1)![0]).toContain('--version printed no version ("nexus dev"): closing a session needs Nexus CLI 0.8.0 or later');
+		const current = load({ responses: { threads, "session close": null }, version: "0.8.0" });
+		await current.run(`session close ${idA} %3`);
+		await current.run(`session close ${idA} %4`);
+		expect(current.calls().filter((c) => c[0] === "--version")).toHaveLength(1);
+		expect(current.calls().filter((c) => c[0] === "session")).toHaveLength(2);
+	});
+
+	test("nexus --version reads as numbers, and an older version compares before a newer one", () => {
+		expect(parseVersion("nexus 0.8.0\n")).toEqual([0, 8, 0]);
+		expect(parseVersion("nexus 0.10.2")).toEqual([0, 10, 2]);
+		expect(parseVersion("usage: nexus")).toBeNull();
+		expect(isOlder([0, 7, 9], [0, 8, 0])).toBe(true);
+		expect(isOlder([0, 10, 0], [0, 8, 0])).toBe(false);
+		expect(isOlder([0, 8, 0], [0, 8, 0])).toBe(false);
+		expect(isOlder([1, 0, 0], [0, 8, 0])).toBe(false);
 	});
 
 	test("a port being published or unpublished refuses a second change from any entry point, without queueing it", async () => {
@@ -271,6 +330,7 @@ describe("the status poll", () => {
 				}),
 			watch: async () => {},
 			attach: async () => {},
+			version: async () => "nexus 0.8.0\n",
 		};
 		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
 		let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;

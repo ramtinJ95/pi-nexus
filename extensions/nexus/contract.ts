@@ -9,6 +9,11 @@ import { Value } from "typebox/value";
 import { NexusError } from "./thread.ts";
 
 const Nullable = <T extends TSchema>(schema: T) => Type.Union([schema, Type.Null()]);
+/**
+ * A union of objects that the `key` property tells apart, as pi-ai's messages are by `role` and their parts by
+ * `type`. `parse` reports a failure inside one against the shape its key names.
+ */
+const Tagged = <T extends TSchema[]>(key: string, variants: [...T]) => Type.Union(variants, { discriminator: key });
 
 export const Base = Type.Object({ kind: Type.Union([Type.Literal("start"), Type.Literal("head")]), commit: Nullable(Type.String()) });
 export type Base = Static<typeof Base>;
@@ -89,11 +94,11 @@ export const Ports = Nullable(Type.Array(ListeningPort));
 /** The agents `session open` can start in a pylon, its default first. */
 export const harnesses = ["claude-code", "pi", "shell"] as const;
 
-/** A Herdr pane in the pylon, as its node last reported it. Its harness is one of `harnesses`. */
-const Session = Type.Object({
+const sessionFields = {
+	/** What `session close` takes: its pane, or `failed-<hash>` for a failed session in no pane. */
+	id: Type.String(),
 	harness: Type.String(),
-	/** The pane, which `session close` takes. */
-	herdrPane: Type.String(),
+	/** Herdr's status when the session last ran, `unknown` if it never did. */
 	status: Type.String(),
 	harnessSessionId: Nullable(Type.String()),
 	/**
@@ -101,8 +106,20 @@ const Session = Type.Object({
 	 * plane that old, which means null too.
 	 */
 	title: Type.Optional(Nullable(Type.String())),
-});
+};
+
+/**
+ * A session of the pylon, told apart by `state`: `running` in its pane, `paused` with its pylon until the next wake
+ * brings it back, or `failed`, which the last wake did not bring back, with `message` saying why. A paused or failed
+ * session's `herdrPane` is the pane it had or left behind, or null. Its harness is one of `harnesses`.
+ */
+const Session = Tagged("state", [
+	Type.Object({ ...sessionFields, state: Type.Literal("running"), herdrPane: Type.String(), message: Type.Null() }),
+	Type.Object({ ...sessionFields, state: Type.Literal("paused"), herdrPane: Nullable(Type.String()), message: Type.Null() }),
+	Type.Object({ ...sessionFields, state: Type.Literal("failed"), herdrPane: Nullable(Type.String()), message: Type.String() }),
+]);
 export type Session = Static<typeof Session>;
+export type SessionState = Session["state"];
 
 /** The reply of `session open`: the session it opened, with the title the CLI gave it. */
 export const OpenedSession = Type.Object({ herdrPane: Type.String(), harness: Type.String(), title: Type.String() });
@@ -136,6 +153,20 @@ export const ThreadDetail = Type.Object({
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 
+/**
+ * `show`'s reply as `ThreadDetail`. A control plane older than CLI 0.8.0 lists only the sessions in panes, with no
+ * `state`, `id` or `message`: each reads as running, named by its pane, as the control plane reads its older probes.
+ */
+export function parseDetail(value: unknown, what: string): ThreadDetail {
+	const sessions = (value as { sessions?: unknown } | null)?.sessions;
+	if (Array.isArray(sessions)) {
+		for (const s of sessions) {
+			if (typeof s === "object" && s !== null && !("state" in s)) Object.assign(s, { state: "running", id: (s as { herdrPane?: unknown }).herdrPane, message: null });
+		}
+	}
+	return parse(ThreadDetail, value, what);
+}
+
 /** A project as `projects` lists it and `project add` prints the one it added. */
 export const Project = Type.Object({
 	id: Type.String(),
@@ -148,12 +179,6 @@ export type Project = Static<typeof Project>;
 
 export const NodeSummary = Type.Object({ name: Type.String(), state: Type.Union([Type.Literal("online"), Type.Literal("offline")]) });
 export type NodeSummary = Static<typeof NodeSummary>;
-
-/**
- * A union of objects that the `key` property tells apart, as pi-ai's messages are by `role` and their parts by
- * `type`. `parse` reports a failure inside one against the shape its key names.
- */
-const Tagged = <T extends TSchema[]>(key: string, variants: [...T]) => Type.Union(variants, { discriminator: key });
 
 const TextPart = Type.Object({ type: Type.Literal("text"), text: Type.String() });
 const ThinkingPart = Type.Object({ type: Type.Literal("thinking"), thinking: Type.String() });

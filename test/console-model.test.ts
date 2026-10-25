@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	ago,
+	confirmOpened,
+	noSessionChanges,
+	settleSessions,
+	shownSessions,
 	argumentsDiff,
 	attachCommand,
 	blocks,
@@ -23,6 +27,7 @@ import {
 	type Item,
 	type ToolItem,
 } from "../extensions/nexus/console/model.ts";
+import type { Session } from "../extensions/nexus/contract.ts";
 import type { RenderedEntry } from "../extensions/nexus/contract.ts";
 import { reduce } from "../extensions/nexus/thread.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
@@ -263,5 +268,31 @@ describe("the attach command", () => {
 		expect(attachCommand("/Users/me/my tools/nexus", "th-0123456789ab")).toBe("'/Users/me/my tools/nexus' attach th-0123456789ab");
 		expect(shellQuote("it's $HOME")).toBe(`'it'\\''s $HOME'`);
 		expect(shellQuote("")).toBe("''");
+	});
+});
+
+describe("sessions just opened", () => {
+	const opened = { herdrPane: "%7", harness: "pi", title: "plan" };
+	const listed = (id: string, harnessSessionId: string | null): Session => ({ id, state: "running", message: null, harness: "pi", herdrPane: id, status: "idle", harnessSessionId, title: "plan" });
+
+	test("each listed session settles one open, and an open the details cannot tell apart keeps its row", () => {
+		const changes = noSessionChanges();
+		confirmOpened(changes, opened, [], 0);
+		confirmOpened(changes, { ...opened, herdrPane: "%8" }, [], 0);
+		// A wake moved both: one new session of that harness and title is listed, so one open settles.
+		const sessions = [listed("%9", "s-9")];
+		expect(shownSessions(sessions, changes).map((s) => [s.id, s.status])).toEqual([["%9", "idle"], ["%8", "opened"]]);
+		settleSessions(changes, sessions, 1);
+		expect(changes.opened.map((o) => o.session.herdrPane)).toEqual(["%8"]);
+	});
+
+	test("a session with no harness session ID settles an open only in its pane, and no details before the open settle it only there", () => {
+		const changes = noSessionChanges();
+		confirmOpened(changes, opened, [], 0);
+		confirmOpened(changes, { ...opened, herdrPane: "%8" }, undefined, 0);
+		settleSessions(changes, [listed("%9", null), listed("%10", "s-10")], 1);
+		expect(changes.opened.map((o) => o.session.herdrPane)).toEqual(["%8"]);
+		settleSessions(changes, [listed("%8", "s-8")], 2);
+		expect(changes.opened).toEqual([]);
 	});
 });

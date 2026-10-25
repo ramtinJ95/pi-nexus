@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Action } from "../extensions/nexus/commands.ts";
 import { ThreadScreen, type ScreenEnd } from "../extensions/nexus/console/thread-screen.ts";
-import type { OpenedSession, Preview, RenderedEntry, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
+import type { OpenedSession, Preview, RenderedEntry, Session, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { reduce, type ThreadView } from "../extensions/nexus/thread.ts";
 import { asked, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { idA, idle } from "./fixtures.ts";
@@ -23,7 +23,11 @@ const published: ThreadDetail = { ...detail, previews: [webPreview, own], ports:
 /** A Claude Code session with a title, the fixture's pi session, and a shell from a control plane older than titles. */
 const withSessions: ThreadDetail = {
 	...detail,
-	sessions: [{ harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: "sid-1", title: "login fix" }, detail.sessions[0]!, { harness: "shell", herdrPane: "%9", status: "unknown", harnessSessionId: null }],
+	sessions: [
+		{ id: "%5", state: "running", message: null, harness: "claude-code", herdrPane: "%5", status: "idle", harnessSessionId: "sid-1", title: "login fix" },
+		detail.sessions[0]!,
+		{ id: "%9", state: "running", message: null, harness: "shell", herdrPane: "%9", status: "unknown", harnessSessionId: null },
+	],
 };
 
 function open(
@@ -37,6 +41,7 @@ function open(
 		shown = detail as ThreadDetail | null,
 		session = { herdrPane: "%7", harness: "claude-code", title: "claude-code" } as OpenedSession | Error,
 		attachFails = undefined as Error | undefined,
+		closeFails = undefined as Error | undefined,
 		cli = "nexus",
 	} = {},
 ) {
@@ -97,9 +102,10 @@ function open(
 				if (session instanceof Error) throw session;
 				return session;
 			},
-			async closeSession(pane) {
-				sessionsClosed.push(pane);
+			async closeSession(id) {
+				sessionsClosed.push(id);
 				await new Promise<void>((resolve) => (release = resolve));
+				if (closeFails) throw closeFails;
 			},
 			async attach() {
 				attaches++;
@@ -573,7 +579,7 @@ describe("thread view", () => {
 		expect(s.text().replace(/\s+/g, " ")).toContain('Opened Claude Code "claude-code" in pane %7. Enter in Pylon, or /attach, attaches this terminal: pick the session\'s workspace in Herdr.');
 		expect(s.refreshes()).toBe(refreshes + 1);
 		// Details asked for after the open are the sessions as they are.
-		s.details({ ...withSessions, sessions: [...withSessions.sessions, { harness: "claude-code", herdrPane: "%7", status: "blocked", harnessSessionId: "sid-7", title: "claude-code" }] });
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, { id: "%7", state: "running", message: null, harness: "claude-code", herdrPane: "%7", status: "blocked", harnessSessionId: "sid-7", title: "claude-code" }] });
 		expect(s.text()).toMatch(/Claude Code  claude-code  ● blocked  %7  session sid-7/);
 		// Enter on the harness opens Claude Code with the CLI's default title.
 		s.press("n", keys.enter);
@@ -644,6 +650,124 @@ describe("thread view", () => {
 		expect(s.text()).toContain("Closed pane %3.");
 		expect(s.text()).not.toMatch(/pi +● /);
 		expect(s.text()).toContain("Sessions 2");
+	});
+
+	test("a paused session reads as resuming on wake, or on unarchive, and x does not close it", () => {
+		const paused: Session = { id: "w1:p1", state: "paused", message: null, harness: "claude-code", herdrPane: "w1:p1", status: "working", harnessSessionId: "bd2c2d6b", title: "review" };
+		const s = open(undefined, { shown: { ...detail, sessions: [paused, detail.sessions[0]!] } });
+		s.normal("4");
+		expect(s.text()).toMatch(/Sessions 2\n → Claude Code  review  ● paused, resumes on wake  w1:p1  session bd2c2d6b\n     enter or \/attach wakes the pylon and attaches this terminal\. It can be closed once it runs\n +pi +● working  %3/);
+		s.press("x");
+		expect(s.text()).not.toContain("Keep");
+		expect(s.text()).toContain('Claude Code "review" is paused with the pylon and resumes on wake. Close it once it runs.');
+		expect(s.sessionsClosed).toEqual([]);
+		const archived = open(undefined, { shown: { ...detail, thread: { ...detail.thread, status: "archived" }, sessions: [paused] } });
+		archived.normal("4");
+		expect(archived.text()).toMatch(/● paused, resumes on unarchive  w1:p1  session bd2c2d6b\n     \/unarchive brings it back, and it can be closed once it runs/);
+		archived.press("x");
+		expect(archived.text()).toContain('Claude Code "review" is paused with the pylon and resumes on unarchive. Close it once it runs.');
+		expect(archived.sessionsClosed).toEqual([]);
+	});
+
+	test("a failed session shows why, whole when selected, and x closes it by its ID, so no wake tries it again", async () => {
+		const failed: Session = {
+			id: "failed-0123456789ab",
+			state: "failed",
+			message: "herdr agent start: the agent did not start.\nThe pane showed:\npi: command not found",
+			harness: "pi",
+			herdrPane: null,
+			status: "unknown",
+			harnessSessionId: "/s.jsonl",
+			title: "plan",
+		};
+		const s = open(undefined, { shown: { ...detail, sessions: [detail.sessions[0]!, failed] } });
+		s.normal("4");
+		// Not selected, it shows its message's first line, with the ID that closes it where a pane would be.
+		expect(s.text()).toMatch(/ +pi +plan  ● failed  failed-0123456789ab  session \/s\.jsonl\n +herdr agent start: the agent did not start\.\n\n Attach/);
+		s.press("j");
+		expect(s.text()).toMatch(/→ pi +plan  ● failed  failed-0123456789ab  session \/s\.jsonl\n +herdr agent start: the agent did not start\.\n +The pane showed:\n +pi: command not found\n +enter or \/attach attaches this terminal, x closes the session so that no wake tries it again/);
+		s.press("x");
+		expect(s.text()).toContain('Close pi "plan", which the last wake did not bring back? No wake tries it again.\n→ Keep\n  Close');
+		s.press("j", keys.enter);
+		expect(s.sessionsClosed).toEqual(["failed-0123456789ab"]);
+		expect(s.text()).toMatch(/→ pi +plan  ● closing\.\.\.  failed-0123456789ab/);
+		expect(s.text()).toContain("Closing session failed-0123456789ab...");
+		s.release();
+		await s.settle();
+		expect(s.text()).toContain("Closed session failed-0123456789ab.");
+		expect(s.text()).toContain("4 Pylon");
+		expect(s.text()).toContain("Sessions 1");
+	});
+
+	test("a close the CLI refuses says why in its words, keeps the session and reads the sessions again", async () => {
+		const moved = "no session is open in pane %3 of pylon py-0123. A wake may have moved it to another pane, which the thread's sessions list";
+		const s = open(undefined, { shown: withSessions, closeFails: new Error(moved) });
+		s.normal("4", "j", "x", "j", keys.enter);
+		const refreshes = s.refreshes();
+		s.release();
+		await s.settle();
+		expect(s.sessionsClosed).toEqual(["%3"]);
+		expect(s.text().replace(/\s+/g, " ")).toContain(`Pane %3 was not closed: ${moved}`);
+		expect(s.text()).toMatch(/→ pi +● working  %3/);
+		expect(s.refreshes()).toBe(refreshes + 1);
+	});
+
+	test("a session closed in a pane that a later session takes shows that session, and one a wake moved stays closed", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("4", "j", "x", "j", keys.enter);
+		s.release();
+		await s.settle();
+		// The details still list the closed pi session, but in the pane a wake gave it: it stays gone.
+		const moved = { ...detail.sessions[0]!, id: "%8", herdrPane: "%8" };
+		s.details({ ...withSessions, sessions: [withSessions.sessions[0]!, moved] });
+		expect(s.text()).not.toMatch(/pi +● /);
+		// A later shell in pane %3 is another session, which shows.
+		const later: Session = { id: "%3", state: "running", message: null, harness: "shell", herdrPane: "%3", status: "unknown", harnessSessionId: null, title: "scratch" };
+		s.details({ ...withSessions, sessions: [withSessions.sessions[0]!, later] });
+		expect(s.text()).toMatch(/Shell +scratch  ● unknown  %3/);
+	});
+
+	test("a later session in a closed session's pane with its harness and title, but another harness session, shows at once", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("4", "x", "j", keys.enter);
+		s.release();
+		await s.settle();
+		expect(s.sessionsClosed).toEqual(["%5"]);
+		expect(s.text()).not.toMatch(/login fix/);
+		const later: Session = { ...withSessions.sessions[0]!, harnessSessionId: "sid-9" } as Session;
+		s.details({ ...withSessions, sessions: [later, ...withSessions.sessions.slice(1)] });
+		expect(s.text()).toMatch(/Claude Code  login fix  ● idle  %5  session sid-9/);
+	});
+
+	test("a session just opened settles once listed, even after a wake moves it and the pylon's other session", async () => {
+		const s = open(undefined, { shown: withSessions });
+		s.normal("n", keys.enter);
+		s.release();
+		await s.settle();
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		// A wake put the existing pi session in %7 and the new one in %8: the new one shows once, the pi session too.
+		const movedPi = { ...detail.sessions[0]!, id: "%7", herdrPane: "%7" };
+		const fresh: Session = { id: "%8", state: "running", message: null, harness: "claude-code", herdrPane: "%8", status: "blocked", harnessSessionId: "sid-8", title: "claude-code" };
+		s.details({ ...withSessions, sessions: [withSessions.sessions[0]!, movedPi, withSessions.sessions[2]!, fresh] });
+		expect(s.text()).not.toContain("● opened");
+		expect(s.text()).toMatch(/pi +● working  %7  session abc/);
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● blocked  %8  session sid-8/);
+		expect(s.text()).toContain("4 Pylon");
+		expect(s.text()).toContain("Sessions 4");
+	});
+
+	test("a session just opened keeps its row while stale details list only the sessions there before, even in its pane", async () => {
+		// Before the open, pane %7 held another session of the same harness and title, which the open's pane now names.
+		const earlier: Session = { id: "%7", state: "running", message: null, harness: "claude-code", herdrPane: "%7", status: "idle", harnessSessionId: "sid-old", title: "claude-code" };
+		const s = open(undefined, { shown: { ...withSessions, sessions: [...withSessions.sessions, earlier] } });
+		s.normal("n", keys.enter);
+		s.release();
+		await s.settle();
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, earlier] });
+		expect(s.text()).toMatch(/Claude Code  claude-code  ● opened  %7/);
+		s.tick(30_000);
+		s.details({ ...withSessions, sessions: [...withSessions.sessions, earlier] });
+		expect(s.text()).not.toContain("● opened");
 	});
 
 	test("Enter in Sessions, /attach and Attach in the actions attach this terminal, and say how it ended", async () => {

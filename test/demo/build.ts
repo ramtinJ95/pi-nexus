@@ -85,7 +85,11 @@ const now = new Date().toISOString();
 const detail = {
 	thread: { id: thread, title: "Fix the probe retry", project: "demo", status: "active", agentTurnRunning: true, createdAt: asked, conversationId: "conv-demo", lastHumanActivityAt: asked, lastAgentActivityAt: Date.now() },
 	pylon: { id: "py-demo", node: "firebat", actualState: "running", failed: null, observedAt: now, retryRefused: null },
-	sessions: [{ harness: "pi", herdrPane: "%1", status: "working", harnessSessionId: null }],
+	sessions: [
+		{ id: "%1", state: "running", message: null, harness: "pi", herdrPane: "%1", status: "working", harnessSessionId: null },
+		{ id: "%2", state: "paused", message: null, harness: "claude-code", herdrPane: "%2", status: "idle", harnessSessionId: "review-session", title: "review" },
+		{ id: "failed-0123456789ab", state: "failed", message: "herdr agent start: the agent did not start.\nThe pane showed:\npi: command not found", harness: "pi", herdrPane: null, status: "unknown", harnessSessionId: "/home/user/.pi/plan.jsonl", title: "plan" },
+	],
 	previews: [web],
 	ports,
 	outputs: [

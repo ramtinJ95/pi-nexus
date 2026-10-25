@@ -815,8 +815,8 @@ describe("console", () => {
 				n.start();
 				await n.run("project sketch");
 				expect(n.notified.at(-1)).toEqual(["Nexus shows the project sketch.", "info"]);
-				// Its agent acted at 1,000, after memoryViewed's origin at zero. Wait for the actual list,
-				// not the transient empty-list summary shown when the scope changes before the first poll.
+				// The looks store starts at 0, so the idle scratch thread, with activity at 1_000, is new once the threads are
+				// listed. A summary drawn before the start's list lands counts no threads, so only the listed one is waited for.
 				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working · 1 new", "the summary of sketch");
 			});
 
@@ -923,6 +923,23 @@ describe("the contract", () => {
 		expect((await showThread(nexus({ responses: { show: { ...detail, sessions } } }), idA)).sessions.map((s) => s.title)).toEqual(["review", null, undefined]);
 		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...detail.sessions[0]!, title: 7 }] } } }), idA)).rejects.toThrow("sessions[0].title");
 		await expect(openSession(nexus({ responses: { "session open": { herdrPane: "%7", harness: "pi" } } }), idA, {})).rejects.toThrow("nexus session open has no title, which pi-nexus needs");
+	});
+
+	test("a session reads as running, paused or failed, and one from a control plane older than session states reads as running in its pane", async () => {
+		const { id: _id, state: _state, message: _message, ...legacy } = detail.sessions[0]!;
+		const paused = { pylon: "pylon-th1", id: "w1:p1", herdrPane: "w1:p1", harness: "claude-code", harnessSessionId: "bd2c2d6b", title: "review", status: "working", state: "paused", message: null };
+		const failed = { pylon: "pylon-th1", id: "failed-0123456789ab", herdrPane: null, harness: "pi", harnessSessionId: "/home/user/.pi/agent/sessions/s.jsonl", title: "plan", status: "unknown", state: "failed", message: "herdr agent start: the agent did not start." };
+		const shown = await showThread(nexus({ responses: { show: { ...detail, sessions: [legacy, paused, failed] } } }), idA);
+		expect(shown.sessions.map((s) => [s.state, s.id, s.herdrPane, s.message])).toEqual([
+			["running", "%3", "%3", null],
+			["paused", "w1:p1", "w1:p1", null],
+			["failed", "failed-0123456789ab", null, "herdr agent start: the agent did not start."],
+		]);
+		// Each state's own shape is checked, and a state the contract does not know is refused.
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...failed, message: null }] } } }), idA)).rejects.toThrow("sessions[0].message");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...paused, herdrPane: null, state: "running" }] } } }), idA)).rejects.toThrow("sessions[0].herdrPane");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...paused, state: "sleeping" }] } } }), idA)).rejects.toThrow("sessions[0].state is none of the values the contract allows");
+		await expect(showThread(nexus({ responses: { show: { ...detail, sessions: [{ ...legacy, herdrPane: undefined }] } } }), idA)).rejects.toThrow("sessions[0]");
 	});
 
 	test("a detail needs its pylon's retry refusal, which may be null", async () => {

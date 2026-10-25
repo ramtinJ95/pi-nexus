@@ -56,6 +56,7 @@ describe("a streaming answer", () => {
 				return new Promise((resolve) => signal.addEventListener("abort", () => resolve()));
 			},
 			attach: async () => {},
+			version: async () => "nexus 0.8.0\n",
 		};
 		const closed = new AbortController();
 		cleanups.push(() => closed.abort());
