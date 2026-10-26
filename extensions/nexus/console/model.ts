@@ -373,6 +373,7 @@ export function conversationItems(entries: readonly RenderedEntry[], live: LiveR
 export function claudeItems(c: ClaudeConversation, model: string | null): Item[] {
 	const items: Item[] = [];
 	const tools = new Map<string, ToolItem>();
+	const pullRequests = new Set<string>();
 	for (const e of c.entries) {
 		const key = `claude:${c.dropped + e.ordinal}`;
 		const notice = (text: string, tone: "info" | "error" = "info") => items.push({ kind: "notice", key, text, tone });
@@ -399,6 +400,10 @@ export function claudeItems(c: ClaudeConversation, model: string | null): Item[]
 				break;
 			case "notice":
 				notice(e.text, e.tone === "error" ? "error" : "info");
+				break;
+			case "pull-request":
+				if (!pullRequests.has(e.url)) notice(`Opened pull request #${e.number}: ${e.url}`);
+				pullRequests.add(e.url);
 				break;
 			case "record":
 				notice(`${e.type}: ${e.summary}`);

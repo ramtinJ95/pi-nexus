@@ -97,6 +97,15 @@ describe("a Claude worker's transcript", () => {
 		expect(keyOf(after, "Done.")).toBe(keyOf(before, "Done.")!);
 		expect(keyOf(after, "And the docs.")).not.toBe(keyOf(before, "Done.")!);
 	});
+
+	test("a pull request Claude opened shows once, however often Claude Code wrote its record", () => {
+		const pr = (number: number) => ({ kind: "pull-request", at: 1, number, url: `https://github.com/acme/probe/pull/${number}`, repository: "acme/probe" });
+		const items = claudeItems(parseConversation({ kind: "claude", entries: [pr(12), { kind: "reply", text: "Opened it." }, pr(12), pr(13)], dropped: 0, readAt: 1, working: false }, "nexus conversation"), null);
+		expect(items.flatMap((i) => (i.kind === "notice" ? [i.text] : []))).toEqual([
+			"Opened pull request #12: https://github.com/acme/probe/pull/12",
+			"Opened pull request #13: https://github.com/acme/probe/pull/13",
+		]);
+	});
 });
 
 describe("thread state", () => {

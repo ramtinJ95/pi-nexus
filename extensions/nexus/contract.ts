@@ -226,6 +226,8 @@ export const claudeEntries = {
 	/** `tone` is `info` or `error`. */
 	notice: Type.Object({ kind: Type.Literal("notice"), tone: Type.String(), text: Type.String() }),
 	turn: Type.Object({ kind: Type.Literal("turn"), durationMs: Type.Number() }),
+	/** Claude Code writes a pull request's record again each time it saves the session, so only the first per `url` shows. */
+	"pull-request": Type.Object({ kind: Type.Literal("pull-request"), number: Type.Number(), url: Type.String() }),
 	/** A transcript record the control plane does not know, kept visible. */
 	record: Type.Object({ kind: Type.Literal("record"), type: Type.String(), summary: Type.String() }),
 };

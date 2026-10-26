@@ -167,6 +167,7 @@ export const claudeUnwritten = (c: ClaudeConversation) =>
 export function claudeTranscript(c: ClaudeConversation, max: number): string {
 	const results = new Map(c.entries.flatMap((e) => (e.kind === "result" ? [[e.toolUseId, e] as const] : [])));
 	const lastTurn = c.entries.map((e) => e.kind).lastIndexOf("turn");
+	const pullRequests = new Set<string>();
 	const lines = c.entries.flatMap((e, i): string[] => {
 		switch (e.kind) {
 			case "prompt":
@@ -185,6 +186,10 @@ export function claudeTranscript(c: ClaudeConversation, max: number): string {
 				return [`[${e.tone === "error" ? "error" : "notice"}] ${e.text}`];
 			case "turn":
 				return [`[turn] ${Math.round(e.durationMs / 1000)}s`];
+			case "pull-request":
+				if (pullRequests.has(e.url)) return [];
+				pullRequests.add(e.url);
+				return [`[pull request] Opened pull request #${e.number}: ${e.url}`];
 			case "record":
 				return [`[record] ${e.type}: ${e.summary}`];
 			default:
