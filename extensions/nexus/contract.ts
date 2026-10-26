@@ -220,7 +220,7 @@ export const claudeEntries = {
 	tool: Type.Object({ kind: Type.Literal("tool"), id: Type.String(), name: Type.String(), input: Type.Record(Type.String(), Type.Unknown()) }),
 	result: Type.Object({ kind: Type.Literal("result"), toolUseId: Type.String(), output: Type.String(), isError: Type.Boolean() }),
 	/** A background subagent or shell finished. */
-	task: Type.Object({ kind: Type.Literal("task"), status: Type.String(), summary: Type.String() }),
+	task: Type.Object({ kind: Type.Literal("task"), status: Type.String(), summary: Type.String(), result: Type.Optional(Nullable(Type.String())) }),
 	/** A prompt typed while Claude was busy joins its queue on `enqueue`, and leaves it on any other op. */
 	queue: Type.Object({ kind: Type.Literal("queue"), op: Type.String(), text: Nullable(Type.String()) }),
 	/** `tone` is `info` or `error`. */

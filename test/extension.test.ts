@@ -284,7 +284,7 @@ describe("/nexus", () => {
 			};
 			const n = load({ responses: { threads, show: claude, conversation }, watch: [{ event: reset(idA, []) }, { event: state(idA, idle) }], watchHold: true });
 			await n.run(`show ${idA}`);
-			expect(n.notes).toEqual([{ title: `${idA}: active, agent idle, pylon running`, body: '> Fix the probe\n\n[tool] Bash {"command":"npm test"} (ok)\n\nFixed.\n\n[turn] 12s' }]);
+			expect(n.notes).toEqual([{ title: `${idA}: active, agent idle, pylon running`, body: '> Fix the probe\n\n[tool] Bash {"command":"npm test"} (ok)\nok\n\nFixed.\n\n[turn] 12s' }]);
 		});
 	});
 

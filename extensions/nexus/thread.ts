@@ -163,7 +163,10 @@ export function claudeQueued(entries: readonly ClaudeEntry[]): (string | null)[]
 export const claudeUnwritten = (c: ClaudeConversation) =>
 	c.readAt === null ? "Claude's transcript has not been read yet. It is read while the pylon runs." : "Claude has not written a transcript yet.";
 
-/** A Claude worker's transcript as the CLI's text renders it, kept to its last `max` characters. */
+/**
+ * A Claude worker's transcript as the CLI's text renders it, with each tool's and background task's output under it, as
+ * the Claude Code Nexus mod gives it, kept to its last `max` characters.
+ */
 export function claudeTranscript(c: ClaudeConversation, max: number): string {
 	const results = new Map(c.entries.flatMap((e) => (e.kind === "result" ? [[e.toolUseId, e] as const] : [])));
 	const lastTurn = c.entries.map((e) => e.kind).lastIndexOf("turn");
@@ -178,10 +181,11 @@ export function claudeTranscript(c: ClaudeConversation, max: number): string {
 				const result = results.get(e.id);
 				const how = result !== undefined ? (result.isError ? "failed" : "ok") : c.working && i > lastTurn ? "running" : "no result";
 				const input = JSON.stringify(e.input);
-				return [`[tool] ${e.name} ${input.length <= 200 ? input : `${input.slice(0, 200)}...`} (${how})`];
+				const output = result?.output.trimEnd();
+				return [`[tool] ${e.name} ${input.length <= 200 ? input : `${input.slice(0, 200)}...`} (${how})${output ? `\n${output}` : ""}`];
 			}
 			case "task":
-				return [`[task] ${e.status}: ${e.summary}`];
+				return [`[task] ${e.status}: ${e.summary}${e.result?.trim() ? `\n${e.result.trimEnd()}` : ""}`];
 			case "notice":
 				return [`[${e.tone === "error" ? "error" : "notice"}] ${e.text}`];
 			case "turn":
