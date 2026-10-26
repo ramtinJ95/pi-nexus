@@ -165,10 +165,12 @@ export const claudeUnwritten = (c: ClaudeConversation) =>
 
 /**
  * A Claude worker's transcript as the CLI's text renders it, with each tool's and background task's output under it, as
- * the Claude Code Nexus mod gives it, kept to its last `max` characters.
+ * the Claude Code Nexus mod gives it, and a result whose call the window dropped on its own, kept to its last `max`
+ * characters.
  */
 export function claudeTranscript(c: ClaudeConversation, max: number): string {
 	const results = new Map(c.entries.flatMap((e) => (e.kind === "result" ? [[e.toolUseId, e] as const] : [])));
+	const calls = new Set(c.entries.flatMap((e) => (e.kind === "tool" ? [e.id] : [])));
 	const lastTurn = c.entries.map((e) => e.kind).lastIndexOf("turn");
 	const pullRequests = new Set<string>();
 	const lines = c.entries.flatMap((e, i): string[] => {
@@ -177,6 +179,9 @@ export function claudeTranscript(c: ClaudeConversation, max: number): string {
 				return [`> ${promptLabel(e.from)}${e.text.split("\n").join("\n> ")}`];
 			case "reply":
 				return [e.text];
+			case "result":
+				if (calls.has(e.toolUseId)) return [];
+				return [`[tool result] (${e.isError ? "failed" : "ok"})${e.output.trimEnd() ? `\n${e.output.trimEnd()}` : ""}`];
 			case "tool": {
 				const result = results.get(e.id);
 				const how = result !== undefined ? (result.isError ? "failed" : "ok") : c.working && i > lastTurn ? "running" : "no result";
