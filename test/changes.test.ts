@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createNexus, readChanges, readDiff } from "../extensions/nexus/cli.ts";
 import { Checkout, changesLines, maxDiffRows, parseDiff, statusLetter, treeRows, type CheckoutFacts } from "../extensions/nexus/console/changes.ts";
-import type { ChangedFile, Changes, Diff } from "../extensions/nexus/contract.ts";
+import type { Base, ChangedFile, Changes, Diff } from "../extensions/nexus/contract.ts";
 import { fakeNexus, idA } from "./fixtures.ts";
 import { piTheme, plain } from "./console-fixture.ts";
 
@@ -16,14 +16,14 @@ afterEach(() => cleanup.splice(0).forEach((f) => f()));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function reader(facts = running) {
-	const reads: { head: boolean; signal: AbortSignal; resolve(value: Changes): void; reject(err: Error): void }[] = [];
-	const diffs: { paths: readonly string[]; head: boolean; signal: AbortSignal; resolve(value: Diff): void }[] = [];
-	const persisted: boolean[] = [];
+	const reads: { base: Base["kind"]; signal: AbortSignal; resolve(value: Changes): void; reject(err: Error): void }[] = [];
+	const diffs: { paths: readonly string[]; base: Base["kind"]; signal: AbortSignal; resolve(value: Diff): void }[] = [];
+	const persisted: Base["kind"][] = [];
 	const checkout = new Checkout({
-		changes: (head, signal) => new Promise((resolve, reject) => reads.push({ head, signal, resolve, reject })),
-		diff: (paths, head, signal) => new Promise((resolve) => diffs.push({ paths, head, signal, resolve })),
-		persist: (head) => { persisted.push(head); },
-	}, false, () => {});
+		changes: (base, signal) => new Promise((resolve, reject) => reads.push({ base, signal, resolve, reject })),
+		diff: (paths, base, signal) => new Promise((resolve) => diffs.push({ paths, base, signal, resolve })),
+		persist: (base) => { persisted.push(base); },
+	}, "start", () => {});
 	checkout.update(facts);
 	cleanup.push(() => checkout.dispose());
 	return { checkout, reads, diffs, persisted, text: () => plain(changesLines(piTheme(), checkout, 0, 100).lines) };
@@ -64,10 +64,16 @@ describe("Changes tree and diff", () => {
 		r.checkout.changes = { ...changed([]), base: { kind: "start", commit: null } };
 		expect(r.text()).toContain("an empty repository");
 		expect(r.text()).toContain("Nothing has changed since the pylon booted.");
-		r.checkout.uncommitted = true;
+		r.checkout.base = "head";
 		r.checkout.changes.base.kind = "head";
 		expect(r.text()).toContain("no commit yet");
 		expect(r.text()).toContain("No uncommitted changes.");
+		r.checkout.base = "turn";
+		r.checkout.changes = { ...changed([]), base: { kind: "turn", commit: "5a1e0ff1234" } };
+		expect(r.text()).toContain("since the latest turn began, 5a1e0ff");
+		expect(r.text()).toContain("Nothing has changed this turn.");
+		r.checkout.file = file("a.ts");
+		expect(r.text()).toContain("M a.ts vs turn start");
 	});
 	test("parses hunks, only new line numbers, rename/mode metadata and no-newline markers", () => {
 		const parsed = parseDiff(patch);
@@ -127,7 +133,7 @@ describe("checkout read policy", () => {
 	});
 	test("paused pylons do not read or wake implicitly, including turn end and toggle", async () => {
 		const paused = { ...running, pylon: "paused" };
-		const r = reader(paused); r.checkout.show(); r.checkout.toggle();
+		const r = reader(paused); r.checkout.show(); r.checkout.toggle("head");
 		r.checkout.update({ ...paused, agentAt: 2 }); expect(r.reads).toHaveLength(0);
 		expect(r.text()).toContain("The pylon is paused. Reading its changes wakes it.");
 		r.checkout.refresh(true); expect(r.reads).toHaveLength(1);
@@ -138,20 +144,30 @@ describe("checkout read policy", () => {
 	});
 	test("archived and deleted refuse even an explicit wake; later closure prevents queued reads", async () => {
 		for (const status of ["archived", "deleted"]) {
-			const r = reader({ ...running, status }); r.checkout.show(); r.checkout.refresh(true); r.checkout.toggle();
+			const r = reader({ ...running, status }); r.checkout.show(); r.checkout.refresh(true); r.checkout.toggle("head");
 			expect(r.reads).toHaveLength(0); expect(r.text().replace(/\s+/g, " ")).toContain(status === "deleted" ? "checkout is gone" : "Unarchive the thread to read them");
 		}
-		const r = reader(); r.checkout.show(); r.checkout.toggle(); r.checkout.update({ ...running, status: "archived" });
+		const r = reader(); r.checkout.show(); r.checkout.toggle("head"); r.checkout.update({ ...running, status: "archived" });
 		r.reads[0]!.resolve(changed()); await tick(); expect(r.reads).toHaveLength(1);
 	});
 	test("toggle during a read queues the new base, drops old replies/errors, and persists the choice", async () => {
-		const r = reader(); r.checkout.show(); r.checkout.toggle();
-		expect(r.reads).toHaveLength(1); expect(r.persisted).toEqual([true]);
+		const r = reader(); r.checkout.show(); r.checkout.toggle("head");
+		expect(r.reads).toHaveLength(1); expect(r.persisted).toEqual(["head"]);
 		r.reads[0]!.resolve(changed()); await tick();
-		expect(r.checkout.changes).toBeUndefined(); expect(r.reads.map((x) => x.head)).toEqual([false, true]);
-		r.checkout.toggle(); r.reads[1]!.reject(new Error("stale refusal")); await tick();
-		expect(r.checkout.error).toBeUndefined(); expect(r.reads.map((x) => x.head)).toEqual([false, true, false]);
+		expect(r.checkout.changes).toBeUndefined(); expect(r.reads.map((x) => x.base)).toEqual(["start", "head"]);
+		r.checkout.toggle("head"); r.reads[1]!.reject(new Error("stale refusal")); await tick();
+		expect(r.checkout.error).toBeUndefined(); expect(r.reads.map((x) => x.base)).toEqual(["start", "head", "start"]);
 		r.reads[2]!.resolve(changed()); await tick(); expect(r.checkout.changes).toEqual(changed());
+	});
+	test("T toggles the latest turn's changes and back to boot, c from the turn goes to uncommitted, and only boot suggests c", async () => {
+		const r = reader(); r.checkout.show(); r.reads[0]!.resolve(changed()); await tick();
+		r.checkout.toggle("turn"); r.reads[1]!.reject(new Error("No latest-turn snapshot is available")); await tick();
+		expect(r.text()).toContain("No latest-turn snapshot is available"); expect(r.text()).not.toContain("c shows the uncommitted changes");
+		r.checkout.toggle("turn"); r.reads[2]!.resolve(changed()); await tick();
+		r.checkout.toggle("turn"); r.checkout.toggle("head"); r.reads[3]!.resolve(changed()); await tick();
+		expect(r.reads.map((x) => x.base)).toEqual(["start", "turn", "start", "turn", "head"]);
+		expect(r.persisted).toEqual(["turn", "start", "turn", "head"]);
+		expect(r.checkout.base).toBe("head");
 	});
 	test("re-read keeps the last result, coalesces requests, shows no-base refusal and c hint", async () => {
 		const r = reader(); r.checkout.show(); r.reads[0]!.resolve(changed()); await tick();
@@ -174,7 +190,7 @@ describe("checkout read policy", () => {
 	});
 	test("only one child at a time; a diff's old base is discarded; close aborts the active child", async () => {
 		const r = reader(); r.checkout.show(); r.reads[0]!.resolve(changed()); await tick();
-		r.checkout.open(file("a.ts")); r.checkout.toggle(); expect(r.reads).toHaveLength(1);
+		r.checkout.open(file("a.ts")); r.checkout.toggle("head"); expect(r.reads).toHaveLength(1);
 		r.diffs[0]!.resolve(diff); await tick(); expect(r.checkout.diff).toBeUndefined(); expect(r.reads).toHaveLength(2);
 		r.checkout.dispose(); expect(r.reads[1]!.signal.aborted).toBe(true);
 		r.reads[1]!.resolve(changed()); await tick(); expect(r.checkout.changes).toBeUndefined(); expect(r.diffs).toHaveLength(1);
@@ -185,25 +201,25 @@ describe("checkout CLI contract", () => {
 	test("validates replies and protects both rename paths from flags", async () => {
 		const fake = fakeNexus({ responses: { changes: changed(), diff } }); cleanup.push(fake.cleanup);
 		const nexus = createNexus(fake.bin);
-		expect(await readChanges(nexus, idA, true)).toEqual(changed());
-		expect(await readDiff(nexus, idA, ["--new.ts", "old name.ts"], false)).toEqual(diff);
+		expect(await readChanges(nexus, idA, "head")).toEqual(changed());
+		expect(await readDiff(nexus, idA, ["--new.ts", "old name.ts"], "start")).toEqual(diff);
 		expect(fake.calls()).toEqual([["changes", "--json", "--uncommitted", "--", idA], ["diff", "--json", "--", idA, "--new.ts", "old name.ts"]]);
 	});
 	test("old CLI says to update, missing fields fail, and no-base refusal retains the CLI message", async () => {
 		for (const command of ["changes", "diff"] as const) {
 			const fake = fakeNexus({ fail: { [command]: { exit: 64, kind: "invalid", error: `unknown command ${command}` } } }); cleanup.push(fake.cleanup);
 			const nexus = createNexus(fake.bin);
-			await expect(command === "changes" ? readChanges(nexus, idA, false) : readDiff(nexus, idA, [], false)).rejects.toThrow("needs Nexus CLI 0.6.0 or later (nexus --version). Update the nexus CLI.");
+			await expect(command === "changes" ? readChanges(nexus, idA, "start") : readDiff(nexus, idA, [], "start")).rejects.toThrow("needs Nexus CLI 0.6.0 or later (nexus --version). Update the nexus CLI.");
 		}
 		const missing = fakeNexus({ responses: { changes: { ...changed(), base: { kind: "start" } } } }); cleanup.push(missing.cleanup);
-		await expect(readChanges(createNexus(missing.bin), idA, false)).rejects.toThrow("commit");
+		await expect(readChanges(createNexus(missing.bin), idA, "start")).rejects.toThrow("commit");
 		const noBase = fakeNexus({ fail: { changes: { exit: 1, kind: "failed", error: "Ask for the changes since HEAD instead" } } }); cleanup.push(noBase.cleanup);
-		await expect(readChanges(createNexus(noBase.bin), idA, false)).rejects.toThrow("Ask for the changes since HEAD instead");
+		await expect(readChanges(createNexus(noBase.bin), idA, "start")).rejects.toThrow("Ask for the changes since HEAD instead");
 	});
 	test("aborting the checkout stops a real CLI child", async () => {
 		const fake = fakeNexus({ responses: { changes: changed() }, delayMs: { changes: 10_000 } }); cleanup.push(fake.cleanup);
 		const stop = new AbortController();
-		const result = readChanges(createNexus(fake.bin), idA, false, stop.signal);
+		const result = readChanges(createNexus(fake.bin), idA, "start", stop.signal);
 		stop.abort();
 		await expect(result).rejects.toThrow("aborted");
 	});

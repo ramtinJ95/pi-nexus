@@ -1,7 +1,7 @@
 /** Checkout reads are human activity: no timer, and no implicit wake. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { ChangedFile, Changes, Diff } from "../contract.ts";
+import type { Base, ChangedFile, Changes, Diff } from "../contract.ts";
 
 export const statusLetter: Readonly<Record<ChangedFile["status"], string>> = { added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", typechange: "T" };
 export type TreeRow = { path: string; name: string; depth: number } & ({ kind: "folder"; closed: boolean } | { kind: "file"; file: ChangedFile });
@@ -63,13 +63,21 @@ export function parseDiff(text: string): { rows: DiffRow[]; meta: string[]; trun
 	return { rows, meta, truncated, binary };
 }
 
+/** `agentAt` changes with every turn end, a Claude worker's included. */
 export interface CheckoutFacts { status: string; pylon: string; working: boolean; agentAt: number }
 export const canRead = (f: CheckoutFacts | undefined) => f?.pylon === "running" && (f.status === "active" || f.status === "idle");
 export interface CheckoutActions {
-	changes(uncommitted: boolean, signal: AbortSignal): Promise<Changes>;
-	diff(paths: readonly string[], uncommitted: boolean, signal: AbortSignal): Promise<Diff>;
-	persist(uncommitted: boolean): void;
+	changes(base: Base["kind"], signal: AbortSignal): Promise<Changes>;
+	diff(paths: readonly string[], base: Base["kind"], signal: AbortSignal): Promise<Diff>;
+	persist(base: Base["kind"]): void;
 }
+
+/** What a base is called, as the dashboard calls it: beside a file, after the totals, and when nothing changed. */
+const baseWords: Readonly<Record<Base["kind"], { file: string; since: string; empty: string }>> = {
+	start: { file: "vs boot", since: "since the pylon booted", empty: "Nothing has changed since the pylon booted." },
+	head: { file: "vs last commit", since: "since the last commit", empty: "No uncommitted changes." },
+	turn: { file: "vs turn start", since: "since the latest turn began", empty: "Nothing has changed this turn." },
+};
 
 /** Serializes reads, coalesces requests, and drops replies for a superseded base or file. */
 export class Checkout {
@@ -77,7 +85,7 @@ export class Checkout {
 	diff: Diff | undefined;
 	file: ChangedFile | undefined;
 	facts: CheckoutFacts | undefined;
-	uncommitted: boolean;
+	base: Base["kind"];
 	error: string | undefined;
 	busy = false;
 	wanted = false;
@@ -88,7 +96,7 @@ export class Checkout {
 	private revision = 0;
 	private baseRevision = 0;
 	private readonly stop = new AbortController();
-	constructor(private readonly actions: CheckoutActions, uncommitted: boolean, private readonly redraw: () => void) { this.uncommitted = uncommitted; }
+	constructor(private readonly actions: CheckoutActions, base: Base["kind"], private readonly redraw: () => void) { this.base = base; }
 	get rows(): TreeRow[] { return treeRows(this.changes?.files ?? [], this.closed); }
 	get canWake(): boolean { return this.facts !== undefined && ["active", "idle"].includes(this.facts.status) && !canRead(this.facts); }
 	show(): void {
@@ -113,13 +121,14 @@ export class Checkout {
 			if (!(this.wanted && this.busy)) this.refresh();
 		}
 	}
-	toggle(): void {
-		this.uncommitted = !this.uncommitted;
+	/** Compares with `base`, or with the boot base again when it already does. */
+	toggle(base: "head" | "turn"): void {
+		this.base = this.base === base ? "start" : base;
 		this.revision++;
 		this.baseRevision++;
 		this.changes = undefined; this.diff = undefined;
 		this.refresh();
-		try { this.actions.persist(this.uncommitted); }
+		try { this.actions.persist(this.base); }
 		catch (err) { this.error = `The choice lasts for this session only: ${String(err)}`; }
 		this.redraw();
 	}
@@ -144,7 +153,7 @@ export class Checkout {
 		const file = this.file;
 		if (!changes && (!this.pendingDiff || !file)) return;
 		if (changes) this.pendingChanges = false; else this.pendingDiff = false;
-		const revision = this.revision, baseRevision = this.baseRevision, base = this.uncommitted;
+		const revision = this.revision, baseRevision = this.baseRevision, base = this.base;
 		this.busy = true; this.error = undefined; this.redraw();
 		try {
 			if (changes) {
@@ -160,7 +169,7 @@ export class Checkout {
 			if (canRead(this.facts)) this.wanted = false;
 		} catch (err) {
 			if (baseRevision === this.baseRevision && (changes || revision === this.revision) && !this.stop.signal.aborted) {
-				this.error = `${err instanceof Error ? err.message : String(err)}${base ? "" : " · c shows the uncommitted changes."}`;
+				this.error = `${err instanceof Error ? err.message : String(err)}${base === "start" ? " · c shows the uncommitted changes." : ""}`;
 				this.pendingDiff = false;
 			}
 			this.wanted = false;
@@ -197,7 +206,7 @@ export function changesLines(t: Theme, checkout: Checkout, selected: number, wid
 	if (note && !checkout.busy) return { lines, rows };
 	const { changes, file, diff } = checkout;
 	if (file) {
-		lines.push(rightAligned(` ${statusBadge(t, file.status)} ${file.path} ${t.fg("dim", checkout.uncommitted ? "vs last commit" : "vs boot")}`, counts(t, file.additions, file.deletions), width), "");
+		lines.push(rightAligned(` ${statusBadge(t, file.status)} ${file.path} ${t.fg("dim", baseWords[checkout.base].file)}`, counts(t, file.additions, file.deletions), width), "");
 		if (diff) {
 			const parsed = parseDiff(diff.diff);
 			lines.push(...parsed.meta.map((m) => ` ${t.fg("dim", m)}`));
@@ -211,8 +220,8 @@ export function changesLines(t: Theme, checkout: Checkout, selected: number, wid
 	} else if (changes) {
 		const { files, base } = changes;
 		const commit = base.commit?.slice(0, 7) ?? (base.kind === "head" ? "no commit yet" : "an empty repository");
-		lines.push(` ${files.length} ${files.length === 1 ? "file" : "files"} · ${counts(t, files.reduce((n, f) => n + (f.additions ?? 0), 0), files.reduce((n, f) => n + (f.deletions ?? 0), 0))} ${t.fg("dim", `since ${base.kind === "head" ? "the last commit" : "the pylon booted"}, ${commit}`)}`, "");
-		if (!files.length) lines.push(t.fg("dim", checkout.uncommitted ? " No uncommitted changes." : " Nothing has changed since the pylon booted."));
+		lines.push(` ${files.length} ${files.length === 1 ? "file" : "files"} · ${counts(t, files.reduce((n, f) => n + (f.additions ?? 0), 0), files.reduce((n, f) => n + (f.deletions ?? 0), 0))} ${t.fg("dim", `${baseWords[base.kind].since}, ${commit}`)}`, "");
+		if (!files.length) lines.push(t.fg("dim", ` ${baseWords[checkout.base].empty}`));
 		checkout.rows.forEach((row, i) => {
 			const prefix = `${i === selected ? t.fg("accent", "→") : " "} ${"  ".repeat(row.depth)}`;
 			const start = lines.length;

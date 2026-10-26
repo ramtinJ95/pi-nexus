@@ -5,8 +5,8 @@ import { getMarkdownTheme, type KeybindingsManager as Keybindings, type Theme } 
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Display } from "../extensions/nexus/console/transcript.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
-import type { Settings, SettingsStore, Viewed } from "../extensions/nexus/store.ts";
-import type { AssistantMessage, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
+import type { Settings, SettingsStore } from "../extensions/nexus/store.ts";
+import type { AssistantMessage, ClaudeConversation, ClaudeEntry, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { idA, thread } from "./fixtures.ts";
 
 export const asked = 1_700_000_000_000;
@@ -65,6 +65,9 @@ export const live: LiveRun = { queued: ["also update the docs"], tools: [{ callI
 
 export const detail: ThreadDetail = {
 	thread: thread(idA, { project: "nexus", title: "Fix the probe retry", agentTurnRunning: true, conversationId: "conv-1", lastHumanActivityAt: asked, lastAgentActivityAt: asked }),
+	seenAt: null,
+	lastReplyAt: null,
+	attention: "working",
 	pylon: { id: "py-0123", node: "firebat", actualState: "running", failed: null, observedAt: new Date(asked).toISOString(), retryRefused: null },
 	sessions: [{ id: "%3", state: "running", message: null, harness: "pi", herdrPane: "%3", status: "working", harnessSessionId: "abc" }],
 	previews: [webPreview],
@@ -76,6 +79,33 @@ export const detail: ThreadDetail = {
 	agent: { parkedTasks: 0 },
 	desired: "running",
 	attach: "herdr --session nexus",
+};
+
+/** A Claude worker's thread, which has no agent conversation, and whose agent the watch shows idle. */
+export const claudeDetail: ThreadDetail = {
+	...detail,
+	thread: { ...detail.thread, title: "Claude fixes the probe", agentTurnRunning: false, conversationId: null },
+	attention: "working",
+	claudeWorker: { model: "claude-opus-5-5", state: "started" },
+};
+export const claudeIdle: ThreadState = { ...working, run: "idle", queued: 0 };
+
+/** Claude at work: a prompt, a reply, a finished and a running tool call, a background task, and a queued message. */
+export const claudeConversation: ClaudeConversation = {
+	kind: "claude",
+	entries: ([
+		{ kind: "prompt", at: asked, text: "Fix the retry in probe.ts so it backs off.", from: "person" },
+		{ kind: "reply", text: "I'll read the probe first." },
+		{ kind: "tool", id: "toolu_1", name: "Read", input: { file_path: "/home/user/workspace/repo/src/probe.ts" } },
+		{ kind: "result", toolUseId: "toolu_1", output: "export async function probe(url: string) {", isError: false },
+		{ kind: "task", status: "completed", summary: "the test watcher stopped" },
+		{ kind: "notice", tone: "error", text: "The model request was interrupted." },
+		{ kind: "tool", id: "toolu_2", name: "Bash", input: { command: "npm test" } },
+		{ kind: "queue", op: "enqueue", text: "also update the docs" },
+	] satisfies ClaudeEntry[]).map((e, ordinal) => ({ ...e, ordinal })),
+	dropped: 0,
+	readAt: asked,
+	working: true,
 };
 
 export function piTheme(): Theme {
@@ -110,23 +140,6 @@ export const plain = (lines: readonly string[]) =>
 		.map((l) => l.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b_[^\x07]*\x07/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd())
 		.join("\n");
 
-/** Looks kept in memory, so a test never touches the user's own. Every thread counts as looked at from `since`. */
-export function memoryViewed(since = 0): Viewed & { looks: [string, number][] } {
-	const threads: Record<string, number> = {};
-	const looks: [string, number][] = [];
-	return {
-		looks,
-		read: () => ({ since, threads: { ...threads } }),
-		mark(thread, at) {
-			looks.push([thread, at]);
-			threads[thread] = Math.max(threads[thread] ?? 0, at);
-		},
-		prune(kept, listedAt) {
-			for (const [thread, at] of Object.entries(threads)) if (!kept.has(thread) && at < listedAt) delete threads[thread];
-		},
-	};
-}
-
 /** Settings kept in memory, with each change recorded. */
 export function memorySettings(settings: Partial<Settings> = {}): SettingsStore & { writes: Partial<Settings>[] } {
 	let kept: Settings = { strip: true, project: null, ...settings };
@@ -145,4 +158,4 @@ export function memorySettings(settings: Partial<Settings> = {}): SettingsStore 
 export const memoryScope = (settings: Partial<Settings> = {}) => new Scope(memorySettings(settings), () => {}, () => {});
 
 /** The extension's stores, in memory. */
-export const memoryStores = (viewed = memoryViewed(), settings = memorySettings()) => ({ viewed, settings });
+export const memoryStores = (settings = memorySettings()) => ({ settings });

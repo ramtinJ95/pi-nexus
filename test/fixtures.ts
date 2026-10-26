@@ -23,12 +23,12 @@ export function thread(id: string, extra: Partial<Thread> = {}): Thread {
 	};
 }
 
-/** A thread as a row of `nexus threads`, with its pylon running unless `extra` says otherwise. */
+/** A thread as a row of `nexus threads`, with its pylon running and nothing to show unless `extra` says otherwise. */
 export function row(id: string, extra: Partial<ThreadRow> = {}): ThreadRow {
-	return { ...thread(id), desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
+	return { ...thread(id), seenAt: null, lastReplyAt: null, attention: null, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
 }
 
-export const threads = [row(idA, { agentTurnRunning: true }), row(idB), row(idC, { status: "archived" })];
+export const threads = [row(idA, { agentTurnRunning: true, attention: "working" }), row(idB), row(idC, { status: "archived" })];
 
 export const head: RenderedEntry = { entry: { id: 0 }, text: "" };
 export const user = (id: number, text: string): RenderedEntry => ({ entry: { id, model: [{ role: "user", content: text, timestamp: 0 }] }, text: `> ${text}` });
@@ -56,7 +56,8 @@ export interface Scenario {
 	responses?: Record<string, unknown>;
 	/** Replies that replace `responses` once the command they are under has answered. */
 	after?: Record<string, Record<string, unknown>>;
-	fail?: Record<string, { exit: number; kind?: string; error?: string; stderr?: string }>;
+	/** `times` fails only that many runs of the command. */
+	fail?: Record<string, { exit: number; kind?: string; error?: string; stderr?: string; times?: number }>;
 	watch?: { event: WatchEvent | string; delayMs?: number }[];
 	watchHold?: boolean;
 	watchExitDelayMs?: number;
@@ -64,7 +65,7 @@ export interface Scenario {
 	delayMs?: Record<string, number>;
 	/** The signal that stops `attach`, as Ctrl+C stops the CLI. */
 	attachSignal?: string;
-	/** What `nexus --version` prints after `nexus `, 0.9.0 unless given. */
+	/** What `nexus --version` prints after `nexus `, 0.17.0 unless given. */
 	version?: string;
 }
 
@@ -107,7 +108,7 @@ export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 		},
 		async attach() {},
 		async version() {
-			return "nexus 0.9.0\n";
+			return "nexus 0.17.0\n";
 		},
 	};
 }

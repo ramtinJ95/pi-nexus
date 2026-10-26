@@ -15,9 +15,11 @@ import {
 	listNodes,
 	listProjects,
 	listThreads,
+	markSeen,
 	openSession,
 	previewPort,
 	readChanges,
+	readConversation,
 	readDiff,
 	sendText,
 	showThread,
@@ -26,11 +28,11 @@ import {
 	type Nexus,
 } from "../cli.ts";
 import type { Action } from "../commands.ts";
-import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
-import type { NodeSummary, ThreadRow } from "../contract.ts";
+import { emptyView, isWorking, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
+import type { NodeSummary, ThreadDetail, ThreadRow } from "../contract.ts";
 import { inScope, type Scope } from "../scope.ts";
-import type { SettingsStore, Viewed } from "../store.ts";
-import { attachCommand, isClosed, noteParked, startArgs, type Parked } from "./model.ts";
+import type { SettingsStore } from "../store.ts";
+import { attachCommand, isClosed, startArgs, unread } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { ProjectFormView } from "./project-form.ts";
 import { ProjectPicker, type ProjectEnd } from "./project-picker.ts";
@@ -40,6 +42,10 @@ import type { Display } from "./transcript.ts";
 
 const pickerEveryMs = 5_000;
 const detailEveryMs = 10_000;
+/** How often a Claude worker's transcript is read while its turn runs, as the dashboard reads it. */
+const claudeEveryMs = 2_000;
+/** The longest a failed read of the transcript waits before it is tried again. */
+const claudeRetryMaxMs = 60_000;
 /** The most often a thread redraws: a streaming answer prints a live event up to ten times a second. */
 const drawEveryMs = 100;
 
@@ -142,7 +148,7 @@ type Place =
 
 /** The thread whose agent is working, the most recently active first, which `/nexus` opens on. */
 function workingThread(threads: readonly ThreadRow[]): string | undefined {
-	return threads.filter((t) => t.agentTurnRunning && !isClosed(t)).sort((a, b) => lastActivityAt(b) - lastActivityAt(a))[0]?.id;
+	return threads.filter((t) => isWorking(t) && !isClosed(t)).sort((a, b) => lastActivityAt(b) - lastActivityAt(a))[0]?.id;
 }
 
 export class Console {
@@ -152,12 +158,9 @@ export class Console {
 	constructor(
 		private readonly nexus: Nexus,
 		private readonly closed: AbortSignal,
-		private readonly viewed: Viewed,
-		/** The threads seen parked, which the open thread's watch keeps up to date. */
-		private readonly parked: Parked,
 		/** The project whose threads the picker shows, which the project picker changes. */
 		private readonly scope: Scope,
-		/** Says what went wrong outside a view, such as a look that could not be recorded. */
+		/** Says what went wrong outside a view, such as a reply that could not be marked seen. */
 		private readonly warn: (message: string) => void,
 		private readonly settings: SettingsStore,
 		private readonly display: (cwd: string) => Display = userDisplay,
@@ -275,12 +278,10 @@ export class Console {
 					break;
 				}
 				case "thread": {
-					this.look(place.id);
 					const shown = await this.custom<ScreenEnd>(ui, (tui, theme, keybindings, done) => this.screen(tui, theme, keybindings, done, cwd, place.id), {
 						overlay: true,
 						overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" },
 					});
-					this.look(place.id);
 					if (shown === undefined) return false;
 					const end = shown.result;
 					if (end.kind === "back") back();
@@ -343,15 +344,6 @@ export class Console {
 		return true;
 	}
 
-	/** Records that the person looked at `thread` now, which clears its new marker. */
-	private look(thread: string): void {
-		try {
-			this.viewed.mark(thread, Date.now());
-		} catch (err) {
-			this.warn(`pi-nexus could not record that you viewed ${thread}, so it may still show as new: ${message(err)}`);
-		}
-	}
-
 	private picker(tui: TUI, theme: Theme, done: (end: PickerEnd) => void, at: string | undefined) {
 		const stop = new AbortController();
 		const signal = AbortSignal.any([stop.signal, this.closed]);
@@ -367,7 +359,7 @@ export class Console {
 				]);
 				if (signal.aborted || !current()) return;
 				if (Array.isArray(projects)) this.scope.check(projects, asked);
-				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked }, this.scope.project);
+				picker.setThreads(threads, Array.isArray(projects) ? projects : [], this.scope.project);
 				if (!Array.isArray(projects)) picker.setError(`The projects could not be read, so only projects with threads show: ${message(projects)}`);
 			} catch (err) {
 				if (!signal.aborted && current()) picker.setError(`The threads could not be read: ${message(err)}`);
@@ -402,15 +394,97 @@ export class Console {
 		const stop = new AbortController();
 		const signal = AbortSignal.any([stop.signal, this.closed]);
 		const nexus = this.nexus;
-		const parked = this.parked;
 		let view: ThreadView = emptyView;
 		const begin = inOrder();
+		/** The details last read, whose reply a transcript read about to start covers. */
+		let latest: ThreadDetail | undefined;
+		/** The latest reply a mark went out for, and whether a mark failed for a reason trying again cannot fix. */
+		let marked: number | null = null;
+		let marking = false;
+		let markFailed = false;
+		/** When a mark that failed in an outage may be tried again, since every draw of the shown reply asks for one. */
+		let markAfter = 0;
+		/**
+		 * Marks `reply` seen, for every client, once the view has shown it. The details are read again first, and a newer
+		 * reply than the one shown skips the mark, which that reply's own showing makes. The session's signal, not the
+		 * view's, ends it, so leaving the thread does not abort a mark under way.
+		 */
+		const markRead = async (reply: number) => {
+			if (markFailed || marking || Date.now() < markAfter || (marked !== null && reply <= marked)) return;
+			marking = true;
+			marked = reply;
+			try {
+				const now = await showThread(nexus, thread, this.closed);
+				if (now.lastReplyAt === reply && unread(now)) await markSeen(nexus, thread, this.closed);
+			} catch (err) {
+				if (this.closed.aborted) return;
+				// A failure an outage explains marks the reply on a later showing.
+				if (!(err instanceof NexusError && err.kind === "invalid")) {
+					marked = null;
+					markAfter = Date.now() + detailEveryMs;
+				} else if (!markFailed) {
+					markFailed = true;
+					this.warn(`pi-nexus could not mark ${thread}'s reply seen, so it still shows as new in every client: ${message(err)}`);
+				}
+			} finally {
+				marking = false;
+			}
+		};
+		/**
+		 * A Claude worker's transcript, which the watch never streams, read one read at a time: at once, every
+		 * `claudeEveryMs` while its turn runs, and otherwise only when the details, a send or r say something changed, since
+		 * each read makes the control plane read the pylon. A failed read is tried again, waiting twice as long each time up
+		 * to `claudeRetryMaxMs`, and says so once; a CLI too old to read it stops the reading until r. Nothing is read
+		 * while this terminal is attached to the pylon.
+		 */
+		let claudeRead: { again: boolean } | undefined;
+		let claudeTimer: ReturnType<typeof setTimeout> | undefined;
+		let claudeFailures = 0;
+		let claudeStopped = false;
+		let attaching = false;
+		let claudeSeen: string | undefined;
+		const readClaude = async (): Promise<void> => {
+			if (claudeStopped || attaching || signal.aborted || latest?.claudeWorker === undefined) return;
+			if (claudeRead !== undefined) return void (claudeRead.again = true);
+			const read = (claudeRead = { again: false });
+			clearTimeout(claudeTimer);
+			// The reply the details knew before the read, which the transcript read after it holds.
+			const replyAt = latest.lastReplyAt;
+			try {
+				const conversation = await readConversation(nexus, thread, signal);
+				if (signal.aborted) return;
+				claudeFailures = 0;
+				screen.setConversation(conversation, replyAt);
+				if (conversation.working) claudeTimer = setTimeout(() => void readClaude(), claudeEveryMs);
+			} catch (err) {
+				if (signal.aborted) return;
+				if (claudeFailures === 0) screen.say(`Claude's transcript could not be read: ${message(err)}`, true);
+				if (err instanceof NexusError && err.kind === "invalid") claudeStopped = true;
+				else claudeTimer = setTimeout(() => void readClaude(), Math.min(claudeEveryMs * 2 ** claudeFailures, claudeRetryMaxMs));
+				claudeFailures++;
+			} finally {
+				claudeRead = undefined;
+				if (read.again) void readClaude();
+			}
+		};
+		/** Reads the transcript again when the details show a turn ended, its attention or the pylon changed. */
+		const claudeChanged = (detail: ThreadDetail) => {
+			if (detail.claudeWorker === undefined) return;
+			const seen = JSON.stringify([detail.lastReplyAt, detail.attention, detail.thread.lastAgentActivityAt, detail.thread.status, detail.pylon.actualState]);
+			if (seen === claudeSeen) return;
+			claudeSeen = seen;
+			void readClaude();
+		};
 		const refreshDetail = async () => {
 			const current = begin();
 			const askedAt = screen.mark();
 			try {
 				const detail = await showThread(nexus, thread, signal);
-				if (!signal.aborted && current()) screen.setDetail(detail, askedAt);
+				if (!signal.aborted && current()) {
+					latest = detail;
+					screen.setDetail(detail, askedAt);
+					claudeChanged(detail);
+				}
 			} catch (err) {
 				// The watch reports an outage itself.
 				if (!signal.aborted && current() && !(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) {
@@ -426,11 +500,11 @@ export class Console {
 			thread,
 			cli: nexus.bin,
 			checkout: {
-				uncommitted: this.settings.read().uncommitted ?? false,
+				base: this.settings.read().base ?? "start",
 				actions: {
 					changes: (base, aborted) => readChanges(nexus, thread, base, AbortSignal.any([signal, aborted])),
 					diff: (paths, base, aborted) => readDiff(nexus, thread, paths, base, AbortSignal.any([signal, aborted])),
-					persist: (uncommitted) => this.settings.update({ uncommitted }),
+					persist: (base) => this.settings.update({ base }),
 				},
 			},
 			draft: this.drafts.get(thread),
@@ -442,7 +516,9 @@ export class Console {
 			},
 			actions: {
 				async send(text, steer, requestId) {
-					await sendText(nexus, thread, text, steer, signal, requestId);
+					const sent = await sendText(nexus, thread, text, steer, signal, requestId);
+					if ("claude" in sent) void readClaude();
+					return sent;
 				},
 				async act(action: Action) {
 					await nexus.run([action, thread], signal);
@@ -452,8 +528,23 @@ export class Console {
 				unpublish: (port) => unpreviewPort(nexus, thread, port, signal),
 				openSession: (harness, title) => openSession(nexus, thread, { harness, ...(title === undefined ? {} : { title }) }, signal),
 				closeSession: (id) => closeSession(nexus, thread, id, signal),
-				attach: () => attached(nexus, tui, thread),
-				refresh: () => void refreshDetail(),
+				async attach() {
+					attaching = true;
+					clearTimeout(claudeTimer);
+					try {
+						await attached(nexus, tui, thread);
+					} finally {
+						attaching = false;
+						void readClaude();
+					}
+				},
+				refresh() {
+					void refreshDetail();
+					claudeStopped = false;
+					claudeFailures = 0;
+					void readClaude();
+				},
+				shown: (reply) => void markRead(reply),
 				rewatch: () => watch(),
 				copy: (text) => copyToClipboard(text),
 			},
@@ -468,7 +559,6 @@ export class Console {
 						view = reduce(view, event);
 						redraw.request();
 						if (event.type !== "state") return;
-						noteParked(parked, thread, view.state, Date.now());
 						// A changed state can change what only the detail holds, such as the pylon's node, its previews or a
 						// retry refusal.
 						const key = JSON.stringify(view.state);
@@ -493,6 +583,7 @@ export class Console {
 		return Object.assign(screen, {
 			dispose() {
 				clearInterval(timer);
+				clearTimeout(claudeTimer);
 				redraw.cancel();
 				stop.abort();
 				disposeScreen();

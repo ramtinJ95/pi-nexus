@@ -1,33 +1,16 @@
 /**
- * What pi-nexus keeps in pi's agent directory rather than in one session, since threads and the person's choices
- * outlive the session that made them: when each thread was last looked at, and the console's settings. Every pi
- * session on this Mac shares the files.
+ * What pi-nexus keeps in pi's agent directory rather than in one session, since the person's choices outlive the
+ * session that made them: the console's settings. Every pi session on this Mac shares the file. When a reply was seen
+ * is the control plane's, shared with every client, so nothing here keeps it.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-/** The looks as last read. A thread nobody has looked at counts its agent's activity from `since`. */
-export interface Seen {
-	since: number;
-	threads: Readonly<Record<string, number>>;
-}
-
-export interface Viewed {
-	read(): Seen;
-	/** Records a look at `thread` at `at`. */
-	mark(thread: string, at: number): void;
-	/**
-	 * Drops the looks at threads not in `kept`, a list read at `listedAt`, so the store does not grow with deleted
-	 * threads. A look recorded after the list was read stays, since the list may predate its thread.
-	 */
-	prune(kept: ReadonlySet<string>, listedAt: number): void;
-}
-
 export interface Settings {
-	/** Compare the checkout to HEAD instead of its boot base. Absent in older settings. */
-	uncommitted?: boolean;
+	/** What Changes compares the checkout with, the boot base while absent. */
+	base?: "start" | "head" | "turn";
 	/** Whether the strip of threads that need you, have news or work shows above the editor. */
 	strip: boolean;
 	/** The project whose threads the picker, the strip and the status line show, or null for every project. */
@@ -45,23 +28,14 @@ export interface SettingsStore {
 
 const defaultSettings: Settings = { strip: true, project: null };
 
-const isSeen = (value: unknown): value is Seen =>
-	typeof value === "object" &&
-	value !== null &&
-	typeof (value as Seen).since === "number" &&
-	typeof (value as Seen).threads === "object" &&
-	(value as Seen).threads !== null &&
-	Object.values((value as Seen).threads).every((at) => typeof at === "number");
-
 /** A file from before projects has no `project`, which reads as every project. */
 const isSettings = (value: unknown): value is Partial<Settings> & { strip: boolean } => {
 	const project = (value as Partial<Settings> | null)?.project;
-	const uncommitted = (value as Partial<Settings> | null)?.uncommitted;
-	return typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean" && (uncommitted === undefined || typeof uncommitted === "boolean") && (project === undefined || project === null || typeof project === "string");
+	const base = (value as Partial<Settings> | null)?.base;
+	return typeof value === "object" && value !== null && typeof (value as Settings).strip === "boolean" && (base === undefined || base === "start" || base === "head" || base === "turn") && (project === undefined || project === null || typeof project === "string");
 };
 
 const directory = () => path.join(getAgentDir(), "pi-nexus");
-export const defaultViewedFile = () => path.join(directory(), "viewed.json");
 export const defaultSettingsFile = () => path.join(directory(), "settings.json");
 
 /** A lock whose owner cannot be read, older than this, was left by a session that died while taking it. */
@@ -161,51 +135,9 @@ function jsonFile<T>(file: string, is: (value: unknown) => value is T) {
 }
 
 /**
- * The looks at `file`. A missing file starts from the first read. A file that does not parse starts afresh too, so a
- * broken store costs the markers, never the console. Only `mark` fails when the file cannot be written, so the
- * console can say so. A look merges with what other sessions wrote, keeping the later time of each thread. `held`
- * runs between a change's read and its write, where a test holds to race two sessions.
- */
-export function viewedFile(file: string, now: () => number = Date.now, held: () => void = () => {}): Viewed {
-	const store = jsonFile(file, isSeen);
-	/** The start of a store that could not be written, kept so its markers hold still until a look says why. */
-	let unwritten: Seen | undefined;
-	return {
-		read() {
-			const seen = store.load();
-			if (seen !== undefined) return seen;
-			unwritten ??= { since: now(), threads: {} };
-			const start = unwritten;
-			try {
-				// Another session may have started the store since the load above, and its start wins.
-				return locked(file, () => store.load() ?? store.write(start));
-			} catch {
-				return unwritten;
-			}
-		},
-		mark(thread, at) {
-			locked(file, () => {
-				const seen = store.load() ?? { since: now(), threads: {} };
-				held();
-				store.write({ since: seen.since, threads: { ...seen.threads, [thread]: Math.max(seen.threads[thread] ?? 0, at) } });
-			});
-		},
-		prune(kept, listedAt) {
-			locked(file, () => {
-				const seen = store.load();
-				if (seen === undefined) return;
-				held();
-				const threads = Object.fromEntries(Object.entries(seen.threads).filter(([thread, at]) => kept.has(thread) || at >= listedAt));
-				if (Object.keys(threads).length < Object.keys(seen.threads).length) store.write({ since: seen.since, threads });
-			});
-		},
-	};
-}
-
-/**
  * The settings at `file`, the defaults while it is missing or does not parse. A change merges with what other sessions
- * wrote, under the same lock as the looks, so two sessions changing different settings keep both. `held` runs between
- * a change's read and its write, as for the looks.
+ * wrote, under a lock, so two sessions changing different settings keep both. `held` runs between a change's read and
+ * its write, where a test holds to race two sessions.
  */
 export function settingsFile(file: string, held: () => void = () => {}): SettingsStore {
 	const store = jsonFile(file, isSettings);
@@ -220,4 +152,14 @@ export function settingsFile(file: string, held: () => void = () => {}): Setting
 			});
 		},
 	};
+}
+
+/**
+ * Removes the looks store that pi-nexus kept before the control plane shared when each reply was seen. Nothing reads
+ * it, so a file that cannot be removed only stays behind.
+ */
+export function forgetLooks(file = path.join(directory(), "viewed.json")): void {
+	try {
+		rmSync(file, { force: true });
+	} catch {}
 }

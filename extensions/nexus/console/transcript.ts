@@ -1,7 +1,8 @@
 /**
  * A Nexus conversation drawn with pi's own message components and tool renderers, the way pi replays a saved
  * session, so a thread reads exactly like a pi transcript. The thread's agent is pi too, so its messages and tool
- * calls have the shapes these components expect.
+ * calls have the shapes these components expect. A Claude worker's tools are Claude Code's, which pi's renderers do
+ * not know, so they draw as pi draws a tool it has no renderer for.
  */
 import {
 	AssistantMessageComponent,
@@ -42,6 +43,8 @@ export class Transcript {
 	private cache = new Map<string, Cached>();
 	/** pi's ctrl+o: tool output expanded, and every fold of steps open. */
 	expanded = false;
+	/** Whether the tools are pi's, which pi's own renderers draw. */
+	piTools = true;
 
 	constructor(
 		private readonly tui: TUI,
@@ -104,6 +107,10 @@ export class Transcript {
 				case "tool":
 					out.push(this.tool(block, keep));
 					break;
+				case "notice":
+					if (out.length > 0) out.push(new Spacer(1));
+					out.push(keep(block.key, block.text, () => new Text(this.theme.fg(block.tone === "error" ? "error" : "muted", block.text), this.display.outputPad, 0)));
+					break;
 				case "steps": {
 					const open = this.expanded || block.tools.some((t) => failed(t) || running(t));
 					out.push(new Spacer(1), new Text(this.stepsLine(block.tools, open), this.display.outputPad, 0));
@@ -137,7 +144,7 @@ export class Transcript {
 			return c;
 		};
 		const make = () =>
-			apply(new ToolExecutionComponent(tool.call.name, tool.call.id, tool.call.arguments, { outputPad: this.display.outputPad, showImages: false }, this.renderers[tool.call.name], this.tui, pylonCwd));
+			apply(new ToolExecutionComponent(tool.call.name, tool.call.id, tool.call.arguments, { outputPad: this.display.outputPad, showImages: false }, this.piTools ? this.renderers[tool.call.name] : undefined, this.tui, pylonCwd));
 		// A component cannot drop a result it drew, so a call whose result went away, after a reset, starts afresh.
 		return keep(tool.key, sig, make, (c) => (result.state === "none" ? make() : apply(c as ToolExecutionComponent)));
 	}

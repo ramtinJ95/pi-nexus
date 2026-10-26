@@ -4,8 +4,8 @@
  * - work/, a project for the real pi session, with src/probe.ts and test.sh;
  * - nexus, a fake nexus binary whose thread holds the same conversation, its tool results made by pi's own tools on
  *   a copy of work/, so both sides show the same output;
- * - agent/, a pi agent directory for the session, whose looks store dates from before the other threads answered,
- *   so the picker marks one as new and one, whose pylon failed, as needing you;
+ * - agent/, an empty pi agent directory for the session. The control plane's attention marks one thread as new and
+ *   one, whose pylon failed, as needing you;
  * - a line on stdout with the thread's ID.
  *
  * Two projects, demo and site, list beside two nodes, and `nexus project add` adds a third, which the projects list
@@ -84,6 +84,9 @@ const working = { status: "active", run: "working", parkedTasks: 0, queued: stre
 const now = new Date().toISOString();
 const detail = {
 	thread: { id: thread, title: "Fix the probe retry", project: "demo", status: "active", agentTurnRunning: true, createdAt: asked, conversationId: "conv-demo", lastHumanActivityAt: asked, lastAgentActivityAt: Date.now() },
+	seenAt: asked - 1_800_000,
+	lastReplyAt: asked - 1_800_000,
+	attention: "working",
 	pylon: { id: "py-demo", node: "firebat", actualState: "running", failed: null, observedAt: now, retryRefused: null },
 	sessions: [
 		{ id: "%1", state: "running", message: null, harness: "pi", herdrPane: "%1", status: "working", harnessSessionId: null },
@@ -132,14 +135,17 @@ const other = (id: string, title: string, extra: object) => ({
 	createdAt: asked - 3_600_000,
 	lastHumanActivityAt: asked - 3_000_000,
 	lastAgentActivityAt: asked - 600_000,
+	seenAt: asked - 3_000_000,
+	lastReplyAt: asked - 3_000_000,
+	attention: null,
 	desired: "running",
 	pylon: { node: "firebat", actualState: "running", failed: null },
 	...extra,
 });
 const threads = [
-	{ ...detail.thread, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null } },
-	other("th-0123456789cd", "Document the retry", {}),
-	other("th-0123456789ef", "Upgrade the probe's deps", { pylon: { node: "firebat", actualState: "failed", failed: "git clone: permission denied" } }),
+	{ ...detail.thread, seenAt: detail.seenAt, lastReplyAt: detail.lastReplyAt, attention: detail.attention, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null } },
+	other("th-0123456789cd", "Document the retry", { lastReplyAt: asked - 600_000, attention: "reply" }),
+	other("th-0123456789ef", "Upgrade the probe's deps", { attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "git clone: permission denied" } }),
 	other("th-00000000aaaa", "Spike: probe over HTTP/3", { status: "archived", desired: "paused", pylon: { node: "firebat", actualState: "paused", failed: null } }),
 	other("th-0000000051e0", "Landing page copy", { project: "site", pylon: { node: "nuc", actualState: "paused", failed: null }, desired: "paused" }),
 ];
@@ -197,6 +203,7 @@ const scenario = {
 		projects: [project("demo", "git@github.com:ramtinJ95/probe-demo.git", "firebat"), project("site", "git@github.com:ramtinJ95/site.git", "nuc")],
 		preview: own,
 		unpreview: null,
+		seen: null,
 	},
 	// The details list port 8080's preview once it opens, and stop listing it once it is unpublished.
 	after: { preview: { show: opened }, unpreview: { show: detail } },
@@ -210,8 +217,7 @@ const scenarioFile = path.join(dir, "scenario.json");
 const log = path.join(dir, "calls.log");
 const bin = path.join(dir, "nexus");
 writeFileSync(scenarioFile, JSON.stringify(scenario));
-mkdirSync(path.join(dir, "agent/pi-nexus"), { recursive: true });
-writeFileSync(path.join(dir, "agent/pi-nexus/viewed.json"), JSON.stringify({ since: asked - 1_800_000, threads: {} }));
+mkdirSync(path.join(dir, "agent"), { recursive: true });
 writeFileSync(log, "");
 const fake = path.join(import.meta.dir, "../fake-nexus.mjs");
 writeFileSync(bin, `#!/bin/sh\nFAKE_NEXUS=${JSON.stringify(scenarioFile)} FAKE_NEXUS_LOG=${JSON.stringify(log)} exec node ${JSON.stringify(fake)} "$@"\n`);

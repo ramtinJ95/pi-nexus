@@ -6,7 +6,7 @@ import { addProject, createNexus, listProjects, listThreads, openSession, showTh
 import { shellQuote } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
-import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { claudeConversation, claudeDetail, claudeIdle, detail, display, entries, fakeTui, keybindings, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { fakeNexus, idA, idB, idC, reset, row, state, threads, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -18,6 +18,9 @@ const scenario: Scenario = {
 	watch: [{ event: reset(idA, entries) }, { event: state(idA, working) }, { event: { type: "live", thread: idA, ...live } }],
 	watchHold: true,
 };
+
+/** A watch whose agent has answered, so the reply its details name is the one the conversation shows. */
+const answered: Scenario["watch"] = [{ event: reset(idA, entries) }, { event: state(idA, claudeIdle) }];
 
 /** The detail with port 8080 published on its own, beside the web service's preview. */
 const own = { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" };
@@ -31,7 +34,7 @@ interface Shown {
 }
 
 /** `custom` false stands in for a pi without custom UI, such as RPC mode, whose custom() never calls the factory. */
-function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = memorySettings() as SettingsStore } = {}) {
+function load(s: Scenario, { custom = true, settings = memorySettings() as SettingsStore } = {}) {
 	const fake = fakeNexus(s);
 	const notes: { title: string; body: string }[] = [];
 	const notified: [string, string | undefined][] = [];
@@ -70,7 +73,7 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 					: Promise.resolve(undefined),
 		},
 	} as unknown as ExtensionCommandContext;
-	nexusExtension(pi, createNexus(fake.bin), display, { viewed, settings });
+	nexusExtension(pi, createNexus(fake.bin), display, { settings });
 	cleanups.push(() => handlers.get("session_shutdown")?.(), fake.cleanup);
 	const until = async (check: () => boolean, what: string) => {
 		for (let i = 0; i < 150 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -120,7 +123,12 @@ describe("console", () => {
 		n.press("\x1b"); expect(n.text()).toContain("→   R new.ts");
 		n.press("c");
 		await n.until(() => n.calls().some((c) => c[0] === "changes" && c.includes("--uncommitted")), "HEAD changes");
-		expect(settings.read().uncommitted).toBe(true);
+		expect(settings.read().base).toBe("head");
+		expect(n.text()).toContain("c only uncommitted: on  T latest turn: off");
+		n.press("T");
+		await n.until(() => n.calls().some((c) => c[0] === "changes" && c.includes("--turn")), "the latest turn's changes");
+		expect(settings.read().base).toBe("turn");
+		expect(n.text()).toContain("c only uncommitted: off  T latest turn: on");
 		n.press("3"); expect(n.text()).toContain("https://firebat.example.ts.net");
 		n.press("4"); expect(n.text()).toContain("Desired"); expect(n.text()).toContain("Sessions 1");
 		n.press("\t"); expect(n.text()).toContain("I'll read the probe first.");
@@ -130,7 +138,7 @@ describe("console", () => {
 		await n.until(() => n.shown.length === 2 && n.text().includes("nexus / Fix"), "the reopened thread");
 		n.press("2");
 		await n.until(() => n.text().includes("R new.ts"), "the persisted base");
-		expect(n.calls().filter((c) => c[0] === "changes").at(-1)).toContain("--uncommitted");
+		expect(n.calls().filter((c) => c[0] === "changes").at(-1)).toEqual(["changes", "--json", "--turn", "--", idA]);
 		n.press("q"); await later;
 	});
 
@@ -398,7 +406,7 @@ describe("console", () => {
 	});
 
 	test("with no agent working, /nexus opens the picker; t switches threads, and h returns to the thread you came from", async () => {
-		const idle = threads.map((t) => ({ ...t, agentTurnRunning: false }));
+		const idle = threads.map((t) => ({ ...t, agentTurnRunning: false, attention: null }));
 		const n = load({ ...scenario, responses: { ...scenario.responses, threads: idle } });
 		const done = n.run("");
 		await n.until(() => n.shown.length === 1 && n.text().includes(threads[1]!.title), "the picker");
@@ -416,24 +424,78 @@ describe("console", () => {
 		await done;
 	});
 
-	test("the status line counts working threads, those that need you and new answers, and a look clears new", async () => {
-		const list = [threads[0], row(idB, { lastAgentActivityAt: 1_000 }), row(idC, { pylon: { node: "firebat", actualState: "failed", failed: "boom" } })];
-		const viewed = memoryViewed(0);
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed });
+	test("the status line counts working threads, those that need you and new replies, and opening an unread thread marks it seen once", async () => {
+		const claude = row("th-c1a0de000000", { attention: "working" });
+		const list = [threads[0], row(idB, { attention: "reply", lastReplyAt: 2_000 }), row(idC, { attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "boom" } }), claude];
+		const seen = [threads[0], row(idB, { seenAt: 2_000, lastReplyAt: 2_000 }), list[2], claude];
+		const unread = { ...detail, lastReplyAt: 2_000, attention: "reply" };
+		const n = load({ ...scenario, watch: answered, responses: { ...scenario.responses, threads: list, show: unread, seen: null }, after: { seen: { threads: seen } } });
 		await n.run("list");
-		await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 needs you · 1 new", "the summary");
+		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you · 1 new", "the summary");
 		const done = n.run(`open ${idB}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes(`(${idB})`), "the thread");
-		n.press("q");
+		await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+		n.normal("r");
+		await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
+		n.normal("q");
 		await done;
-		expect(viewed.looks.map(([thread]) => thread)).toEqual([idB, idB]);
-		await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 needs you", "the summary without new");
+		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you", "the summary without new");
+		expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--", idB]]);
+	});
+
+	test("a reply is not marked seen while a turn runs or another view is open", async () => {
+		const unread = { ...detail, lastReplyAt: 2_000, attention: "reply" };
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: unread, seen: null } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the working thread");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+		n.normal("q");
+		await done;
+
+		const later = load({ ...scenario, watch: [{ event: reset(idA, entries) }, { event: state(idA, working), delayMs: 0 }, { event: state(idA, claudeIdle), delayMs: 1_500 }], responses: { ...scenario.responses, show: unread, seen: null } });
+		const shut = later.run(`open ${idA}`);
+		await later.until(() => later.shown.length === 1 && later.text().includes("Fix the probe retry"), "the working thread");
+		later.normal("2");
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		expect(later.calls().some((c) => c[0] === "seen")).toBe(false);
+		later.normal("1");
+		await later.until(() => later.calls().some((c) => c[0] === "seen"), "the mark once Conversation shows the reply");
+		later.normal("q");
+		await shut;
+	});
+
+	test("a thread whose reply was seen, here or in another client, is not marked again", async () => {
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
+		n.normal("q");
+		await done;
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+	});
+
+	test("a CLI older than 0.10.0 cannot mark a reply seen, which one warning says", async () => {
+		const n = load({ ...scenario, watch: answered, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.notified.some(([, level]) => level === "warning"), "the warning");
+		n.normal("r");
+		await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		n.normal("q");
+		await done;
+		expect(n.notified.filter(([, level]) => level === "warning")).toEqual([
+			[`pi-nexus could not mark ${idA}'s reply seen, so it still shows as new in every client: ${n.bin} is 0.9.0: marking a reply seen needs Nexus CLI 0.10.0 or later (nexus --version)`, "warning"],
+		]);
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
 	});
 
 	test("the strip above the editor lists the threads that need you, have news or work, and /nexus strip off hides it for later sessions too", async () => {
-		const list = [{ ...threads[0]!, title: "Fix the probe retry", lastHumanActivityAt: Date.now() - 180_000 }, row(idB, { title: "Answered", lastAgentActivityAt: 1_000 }), row(idC, { title: "Broken", pylon: { node: "firebat", actualState: "failed", failed: "boom" } })];
+		const list = [
+			{ ...threads[0]!, title: "Fix the probe retry", attention: "working", lastHumanActivityAt: Date.now() - 180_000 },
+			row(idB, { title: "Answered", attention: "reply", lastReplyAt: 1_000 }),
+			row(idC, { title: "Broken", attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "boom" } }),
+		];
 		const settings = memorySettings();
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed: memoryViewed(0), settings });
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { settings });
 		await n.run("list");
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
@@ -447,7 +509,7 @@ describe("console", () => {
 		expect(n.statuses.at(-1)).toBeUndefined();
 		expect(settings.writes).toEqual([{ strip: false }]);
 		// A later session reads the setting, so it starts without polling, and a command does not bring either back.
-		const later = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed: memoryViewed(0), settings });
+		const later = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { settings });
 		later.start();
 		await later.run("list");
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -458,16 +520,6 @@ describe("console", () => {
 		expect(later.widgets.at(-1)?.[1]).toBeDefined();
 		expect(later.statuses.at(-1)).toBe("nexus 1 working · 1 needs you · 1 new");
 		expect(settings.writes).toEqual([{ strip: false }, { strip: true }]);
-	});
-
-	test("each poll drops the looks at threads the list no longer has", async () => {
-		const viewed = memoryViewed(0);
-		viewed.mark(idA, 1_000);
-		viewed.mark("th-00000000dead", 1_000);
-		const n = load(scenario, { viewed });
-		n.start();
-		await n.until(() => n.statuses.at(-1) !== undefined, "the summary");
-		expect(viewed.read().threads).toEqual({ [idA]: 1_000 });
 	});
 
 	test("with the strip on, the summary and strip show from the session's start, before any /nexus", async () => {
@@ -482,18 +534,13 @@ describe("console", () => {
 		expect(off.calls()).toEqual([]);
 	});
 
-	test("the open thread's parked tasks need you, in the status line and the strip", async () => {
-		const parked = { ...working, run: "parked" as const, parkedTasks: 2 };
-		const list = [row(idA, { title: "Parked one", lastAgentActivityAt: 1_000 })];
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list }, watch: [{ event: reset(idA, entries) }, { event: state(idA, parked) }] }, { viewed: memoryViewed(Date.now() + 60_000) });
+	test("parked tasks need you, in the status line and the strip, whether any client watched the thread or not", async () => {
+		const list = [row(idA, { title: "Parked one", attention: "parked" })];
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } });
 		await n.run("list");
-		await n.until(() => n.statuses.at(-1) === "nexus 0 working", "the summary");
-		const done = n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 tasks hit the restart limit"), "the parked thread");
-		n.normal("q");
-		await done;
 		await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 needs you", "needs you");
 		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus ● Parked one needs you");
+		expect(n.calls().some((c) => c[0] === "watch")).toBe(false);
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
@@ -545,6 +592,137 @@ describe("console", () => {
 		await done;
 	});
 
+	describe("a Claude worker's thread", () => {
+		const claude = (conversation = claudeConversation): Scenario => ({
+			...scenario,
+			responses: { ...scenario.responses, show: claudeDetail, conversation, send: { claude: { session: "5e55", outcome: "queued", resumed: false } } },
+			watch: [{ event: reset(idA, []) }, { event: state(idA, claudeIdle) }],
+		});
+		const reads = (n: ReturnType<typeof load>) => n.calls().filter((c) => c[0] === "conversation").length;
+
+		test("shows Claude's transcript, reads it every 2 seconds while Claude works, sends to Claude and reads after the send", async () => {
+			const n = load(claude());
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			expect(n.text()).toContain("Background task completed: the test watcher stopped");
+			expect(n.text()).toMatch(/Claude fixes the probe ● agent working/);
+			expect(n.calls().find((c) => c[0] === "conversation")).toEqual(["conversation", "--json", "--", idA]);
+			await n.until(() => reads(n) === 2, "the read 2 seconds later");
+			n.type("and the changelog");
+			await n.until(() => n.text().includes("Queued for Claude, which takes it at its next step."), "the queued note");
+			expect(n.calls().find((c) => c[0] === "send")!.slice(-2)).toEqual(["--", "and the changelog"]);
+			await n.until(() => reads(n) === 3, "the read after the send");
+			n.normal("q");
+			await done;
+		});
+
+		test("an idle Claude costs no reads until its details change, and r reads it again", async () => {
+			const n = load(claude({ ...claudeConversation, working: false }));
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			await new Promise((resolve) => setTimeout(resolve, 2_200));
+			expect(reads(n)).toBe(1);
+			n.normal("r");
+			await n.until(() => reads(n) === 2, "the read r asks for");
+			await new Promise((resolve) => setTimeout(resolve, 2_200));
+			expect(reads(n)).toBe(2);
+			n.normal("q");
+			await done;
+		});
+
+		test("a reply is marked seen only once its transcript shows, and only while the details still name it", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const idle = claude({ ...claudeConversation, working: false });
+			const failing = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer" } } });
+			const shut = failing.run(`open ${idA}`);
+			await failing.until(() => failing.shown.length === 1 && failing.text().includes("Claude's transcript could not be read: the pylon did not answer"), "the failed read");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(failing.calls().some((c) => c[0] === "seen")).toBe(false);
+			failing.normal("q");
+			await shut;
+
+			const n = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+			const calls = n.calls().map((c) => c[0]);
+			expect(calls.indexOf("conversation")).toBeLessThan(calls.indexOf("seen"));
+			n.normal("q");
+			await done;
+		});
+
+		test("a newer reply than the transcript shown skips the mark", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const idle = claude({ ...claudeConversation, working: false });
+			const n = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, after: { conversation: { show: { ...unread, lastReplyAt: 3_000 } } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first.") && n.calls().filter((c) => c[0] === "show").length >= 2, "the check before the mark");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+			n.normal("q");
+			await done;
+		});
+
+		test("a stored transcript read before the details' reply does not mark it seen", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const stale = claude({ ...claudeConversation, working: false, readAt: 1_000 });
+			const n = load({ ...stale, responses: { ...stale.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+			n.normal("q");
+			await done;
+		});
+
+		test("a reply the transcript shows is marked seen while Claude's next turn runs", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const busy = claude();
+			const n = load({ ...busy, responses: { ...busy.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+			expect(n.calls().find((c) => c[0] === "seen")).toEqual(["seen", "--json", "--", idA]);
+			n.normal("q");
+			await done;
+		});
+
+		test("a failed read is tried again, and says so once", async () => {
+			const n = load({ ...claude(), fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer", times: 1 } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript after the retry");
+			expect(n.text()).toContain("Claude's transcript could not be read: the pylon did not answer");
+			n.normal("q");
+			await done;
+		});
+
+		test("nothing is read while the terminal is attached, and the transcript is read again after", async () => {
+			const n = load({ ...claude(), delayMs: { attach: 3_000 } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => reads(n) === 1, "the first read");
+			n.normal("4");
+			n.press("\r");
+			await n.until(() => n.calls().some((c) => c[0] === "attach"), "the attach");
+			const during = reads(n);
+			await new Promise((resolve) => setTimeout(resolve, 2_500));
+			expect(reads(n)).toBe(during);
+			await n.until(() => reads(n) > during, "the read after the attach");
+			n.normal("q");
+			await done;
+		});
+
+		test("a CLI too old to read the transcript says so once and stops reading", async () => {
+			const n = load({ ...claude(), version: "0.16.1" });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("needs Nexus CLI 0.17.0"), "the refusal");
+			expect(n.text().replace(/\s+/g, " ")).toContain(`Claude's transcript could not be read: ${n.bin} is 0.16.1: reading a Claude worker's transcript needs Nexus CLI 0.17.0 or later (nexus --version)`);
+			n.type("hi");
+			await n.until(() => n.calls().some((c) => c[0] === "send"), "the send");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			expect(reads(n)).toBe(0);
+			n.normal("q");
+			await done;
+		});
+	});
+
 	test("a failed send kept as a draft is retried with its request ID after going to the picker and back", async () => {
 		// The reply is lost, so pi cannot tell whether Nexus took the message.
 		const n = load({ ...scenario, fail: { send: { exit: 2, kind: "unreachable", error: "connection reset" } } });
@@ -581,16 +759,16 @@ describe("console", () => {
 	});
 
 	describe("projects", () => {
-		const spoonThread = row("th-5b00a0000001", { project: "spoon", title: "Spoon work", lastAgentActivityAt: 1_000 });
+		const spoonThread = row("th-5b00a0000001", { project: "spoon", title: "Spoon work", attention: "reply", lastReplyAt: 1_000 });
 		const both = [...projects, { id: "spoon", repoUrl: "git@example.com:spoon", defaultNode: "firebat", defaultBranch: "main" }];
-		const idleThreads = [...threads.map((t) => ({ ...t, agentTurnRunning: false })), spoonThread];
+		const idleThreads = [...threads.map((t) => ({ ...t, agentTurnRunning: false, attention: null })), spoonThread];
 		const scoped: Scenario = { ...scenario, responses: { ...scenario.responses, projects: both, threads: [...threads, spoonThread] } };
 		const idleScenario: Scenario = { ...scoped, responses: { ...scoped.responses, threads: idleThreads } };
 		const addFails = (exit: number, kind: string, error: string): Scenario => ({ ...idleScenario, fail: { project: { exit, kind, error } } });
 
 		test("p in the picker chooses a project, whose threads alone then show in the picker, the status line and the strip, in later sessions too", async () => {
 			const settings = memorySettings();
-			const n = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			const n = load(idleScenario, { settings });
 			n.start();
 			await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 new", "the summary of every project");
 			const done = n.run("");
@@ -609,7 +787,7 @@ describe("console", () => {
 			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus spoon · ● Spoon work new reply");
 			n.press("q");
 			await done;
-			const later = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			const later = load(idleScenario, { settings });
 			later.start();
 			await later.until(() => later.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "a later session's summary of spoon");
 		});
@@ -783,7 +961,7 @@ describe("console", () => {
 
 		describe("a scratch project", () => {
 			const sketch = { id: "sketch", repoUrl: null, defaultNode: "nuc", defaultBranch: "trunk" };
-			const sketchThread = row("th-5c00a0000001", { project: "sketch", title: "Sketch work", lastAgentActivityAt: 1_000 });
+			const sketchThread = row("th-5c00a0000001", { project: "sketch", title: "Sketch work", attention: "reply", lastReplyAt: 1_000 });
 			const withScratch: Scenario = { ...scenario, responses: { ...scenario.responses, projects: [...projects, sketch], threads: [...idleThreads.slice(0, 3), sketchThread] } };
 
 			test("shows as scratch in the project picker, and its start form says it starts an empty repository", async () => {
@@ -816,8 +994,8 @@ describe("console", () => {
 				n.start();
 				await n.run("project sketch");
 				expect(n.notified.at(-1)).toEqual(["Nexus shows the project sketch.", "info"]);
-				// The looks store starts at 0, so the idle scratch thread, with activity at 1_000, is new once the threads are
-				// listed. A summary drawn before the start's list lands counts no threads, so only the listed one is waited for.
+				// The idle scratch thread has a reply nobody has seen, so it is new once the threads are listed. A summary drawn
+				// before the start's list lands counts no threads, so only the listed one is waited for.
 				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working · 1 new", "the summary of sketch");
 			});
 

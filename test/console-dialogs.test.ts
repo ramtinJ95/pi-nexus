@@ -6,7 +6,6 @@ import { StartFormView } from "../extensions/nexus/console/start-form.ts";
 import type { StartForm } from "../extensions/nexus/console/model.ts";
 import { asked, fakeTui, keybindings, piTheme, plain } from "./console-fixture.ts";
 import type { ThreadRow } from "../extensions/nexus/contract.ts";
-import type { Seen } from "../extensions/nexus/store.ts";
 import { NexusError } from "../extensions/nexus/thread.ts";
 import { idA, idB, idC, row } from "./fixtures.ts";
 
@@ -23,11 +22,11 @@ describe("picker", () => {
 		row(idC, { project: "nexus", title: "Old work", status: "archived", desired: "deleted", pylon: { node: "firebat", actualState: "absent", failed: null } }),
 	];
 
-	function open(width = 140, seen: Seen = { since: asked + 60_000, threads: {} }, list: ThreadRow[] = threads, parked = new Map<string, number>(), scope: string | null = null) {
+	function open(width = 140, list: ThreadRow[] = threads, scope: string | null = null) {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000);
 		picker.focused = true;
-		picker.setThreads(list, projects, { seen, parked }, scope);
+		picker.setThreads(list, projects, scope);
 		const press = (...input: string[]) => input.forEach((k) => picker.handleInput(k));
 		return { picker, ends, text: () => plain(picker.render(width)), press };
 	}
@@ -53,7 +52,7 @@ describe("picker", () => {
 			{ ...threads[1]!, createdAt: asked - 11 * 60_000 },
 		];
 		for (const width of [140, 110]) {
-			const [fix, docs] = open(width, undefined, list).text().split("\n").filter((l) => l.includes("●"));
+			const [fix, docs] = open(width, list).text().split("\n").filter((l) => l.includes("●"));
 			expect(fix).toEndWith("now");
 			expect(docs).toEndWith("12 min");
 			expect(fix!.length).toBe(width);
@@ -143,7 +142,7 @@ describe("picker", () => {
 	test("s lists the keys too, and r reads the threads again", () => {
 		let reads = 0;
 		const picker = new Picker(fakeTui(), piTheme(), () => {}, () => asked + 60_000, undefined, () => reads++);
-		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() }, null);
+		picker.setThreads(threads, projects, null);
 		picker.handleInput("s");
 		expect(plain(picker.render(140))).toContain("read the threads again");
 		picker.handleInput("j");
@@ -161,46 +160,46 @@ describe("picker", () => {
 		]);
 	});
 
-	test("a failed pylon needs you, and an agent that answered since the last look is new", () => {
-		const failed = row(idB, { project: "nexus", title: "Docs pass", createdAt: asked - 1, pylon: { node: "firebat", actualState: "failed", failed: "git clone: denied" } });
-		const answered = row(idC, { project: "nexus", title: "Answered", createdAt: asked - 2, lastAgentActivityAt: asked + 30_000 });
-		const looked = row("th-00000000000d", { project: "nexus", title: "Looked at", createdAt: asked - 3, lastAgentActivityAt: asked + 30_000 });
-		const list = [threads[0]!, failed, answered, looked];
-		const out = open(140, { since: asked, threads: { "th-00000000000d": asked + 40_000 } }, list).text();
-		expect(out).toMatch(/● Docs pass needs you +failed/);
-		expect(out).toMatch(/● Answered new /);
-		expect(out).not.toMatch(/Looked at new/);
-		// A working agent is not done yet, so its thread is not new.
-		expect(out).not.toMatch(/Fix the probe retry new/);
-		// Nobody has looked since the store began, so an answer before then is not new.
-		expect(open(140, { since: asked + 31_000, threads: {} }, list).text()).not.toMatch(/Answered new/);
-	});
-
-	test("a thread seen parked needs you until its agent does something after that", () => {
-		const parked = new Map([[idB, asked + 10_000]]);
-		const seen = { since: asked + 60_000, threads: {} };
-		const stuck = row(idB, { project: "nexus", title: "Docs pass", createdAt: asked - 1, lastAgentActivityAt: asked + 5_000 });
-		expect(open(140, seen, [threads[0]!, stuck], parked).text()).toMatch(/● Docs pass needs you /);
-		// Retried since: the agent worked after the thread was seen parked.
-		const retried = { ...stuck, lastAgentActivityAt: asked + 20_000 };
-		expect(open(140, seen, [threads[0]!, retried], parked).text()).not.toMatch(/Docs pass needs you/);
+	test("the control plane's attention marks a thread: failed, parked or waiting needs you, and a reply is new", () => {
+		const marked = (title: string, attention: string | null, extra: Partial<ThreadRow> = {}) =>
+			row(`th-0000000000${title.length.toString(16).padStart(2, "0")}`, { project: "nexus", title, createdAt: asked - title.length, attention, ...extra });
+		const list = [
+			threads[0]!,
+			marked("Failed pylon", "failed", { pylon: { node: "firebat", actualState: "failed", failed: "git clone: denied" } }),
+			marked("Parked tasks", "parked"),
+			marked("Waiting session", "waiting"),
+			marked("Unseen reply", "reply"),
+			marked("Agent at work", "working"),
+			marked("From the future", "stalled"),
+			marked("Archived reply", "reply", { status: "archived" }),
+		];
+		const p = open(140, list);
+		p.press(keys.down, keys.down, keys.down, keys.down, keys.down, keys.down, keys.down, keys.down, keys.enter);
+		const out = p.text();
+		for (const title of ["Failed pylon", "Parked tasks", "Waiting session"]) expect(out).toMatch(new RegExp(`● ${title} needs you `));
+		expect(out).toMatch(/● Unseen reply new /);
+		for (const title of ["Agent at work", "From the future", "Archived reply", "Fix the probe retry"]) {
+			expect(out).toContain(title);
+			expect(out).not.toMatch(new RegExp(`${title} (needs you|new)`));
+		}
+		expect(out).toMatch(/● Agent at work +agent working .* agent turn running/);
 	});
 
 	test("opens on the thread it is given, once the threads load", () => {
 		const ends: PickerEnd[] = [];
 		const picker = new Picker(fakeTui(), piTheme(), (end) => ends.push(end), () => asked + 60_000, idB);
-		picker.setThreads(threads, projects, { seen: { since: 0, threads: {} }, parked: new Map() }, null);
+		picker.setThreads(threads, projects, null);
 		picker.handleInput(keys.enter);
 		expect(ends).toEqual([{ kind: "open", thread: idB }]);
 	});
 
 	test("a project scope shows only that project's threads and names it in the header, and p asks for another", () => {
 		const list = [...threads, row("th-5173aaaabbbb", { project: "site", title: "Landing page" })];
-		const all = open(140, undefined, list).text();
+		const all = open(140, list).text();
 		expect(all).toContain("Nexus threads · All projects");
 		expect(all).toContain("Fix the probe retry");
 		expect(all).toContain("Landing page");
-		const site = open(140, undefined, list, undefined, "site");
+		const site = open(140, list, "site");
 		expect(site.text()).toContain("Nexus threads · site");
 		expect(site.text()).toContain("Landing page");
 		expect(site.text()).not.toContain("Fix the probe retry");
