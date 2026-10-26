@@ -27,7 +27,16 @@ describe("the CLI's shared seen state", () => {
 		expect((await listThreads(n.nexus))[0]!.attention).toBe("stalled");
 	});
 
-	test("a CLI without the fields fails as a contract error naming the field", async () => {
+	test("a reply without the fields from a CLI older than 0.10.0 names the version it needs", async () => {
+		const { seenAt: _seenAt, ...old } = row(idA);
+		const { attention: _attention, ...oldDetail } = detail;
+		const n = nexus({ version: "0.9.0", responses: { threads: [old], show: oldDetail } });
+		const needs = `${n.bin} is 0.9.0: reading when replies were seen needs Nexus CLI 0.10.0 or later (nexus --version)`;
+		await expect(listThreads(n.nexus)).rejects.toThrow(needs);
+		await expect(showThread(n.nexus, idA)).rejects.toThrow(needs);
+	});
+
+	test("a newer CLI's reply without the fields fails as a contract error naming the field", async () => {
 		const { seenAt: _seenAt, ...old } = row(idA);
 		await expect(listThreads(nexus({ responses: { threads: [old] } }).nexus)).rejects.toThrow(`nexus threads' row for ${idA} has no seenAt, which pi-nexus needs`);
 	});

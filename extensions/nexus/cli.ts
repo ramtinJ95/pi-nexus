@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
+import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, type ThreadDetail, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -149,10 +149,14 @@ export function createNexus(bin: string = defaultBin()): Nexus {
 
 export async function listThreads(nexus: Nexus, args: readonly string[] = [], signal?: AbortSignal): Promise<ThreadRow[]> {
 	const rows = parse(Type.Array(Type.Unknown()), await nexus.run(["threads", ...args], signal), "nexus threads");
-	return rows.map((row, i) => {
-		const id = (row as { id?: unknown } | null)?.id;
-		return parse(ThreadRow, row, `nexus threads' row for ${typeof id === "string" ? id : `its item ${i}`}`);
-	});
+	try {
+		return rows.map((row, i) => {
+			const id = (row as { id?: unknown } | null)?.id;
+			return parse(ThreadRow, row, `nexus threads' row for ${typeof id === "string" ? id : `its item ${i}`}`);
+		});
+	} catch (err) {
+		throw await seenless(nexus, err, signal);
+	}
 }
 
 /** Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title or a message. */
@@ -172,8 +176,28 @@ export async function startThread(
 export const sendText = async (nexus: Nexus, thread: string, text: string, steer: boolean, signal?: AbortSignal, requestId?: string): Promise<Sent> =>
 	parse(Sent, await nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal), "nexus send");
 
-export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
-	parseDetail(await nexus.run(["show", thread], signal), `nexus show ${thread}`);
+export async function showThread(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<ThreadDetail> {
+	const detail = await nexus.run(["show", thread], signal);
+	try {
+		return parseDetail(detail, `nexus show ${thread}`);
+	} catch (err) {
+		throw await seenless(nexus, err, signal);
+	}
+}
+
+/**
+ * `err`, or for a reply without the seen state, `seenAt`, `lastReplyAt` and `attention`, from a CLI older than 0.10.0,
+ * the version it needs. A newer CLI's reply without them is the control plane's to fix, so its error stands.
+ */
+async function seenless(nexus: Nexus, err: unknown, signal?: AbortSignal): Promise<unknown> {
+	if (!(err instanceof NexusError && err.kind === "contract" && /has no (?:\[\d+\]\.)?(?:seenAt|lastReplyAt|attention),/.test(err.message))) return err;
+	try {
+		await requireVersion(nexus, [0, 10, 0], "reading when replies were seen", signal);
+	} catch (old) {
+		return old;
+	}
+	return err;
+}
 
 /** The flag that picks `base`, after the version check `turn` needs. `--turn` came with CLI 0.11.0. */
 async function baseFlags(nexus: Nexus, base: Base["kind"], signal?: AbortSignal): Promise<string[]> {
@@ -203,6 +227,8 @@ export async function readDiff(nexus: Nexus, thread: string, paths: readonly str
  */
 export async function markSeen(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<void> {
 	await requireVersion(nexus, [0, 10, 0], "marking a reply seen", signal);
+	// The API takes the shown reply's lastReplyAt, so a reply that lands after the caller's check stays unread; once
+	// the CLI has a flag for it, such as --last-reply-at, pass the shown reply here.
 	parse(Seen, await nexus.run(["seen", "--", thread], signal), "nexus seen");
 }
 
