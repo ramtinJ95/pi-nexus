@@ -128,15 +128,15 @@ export function nexusTools(nexus: Nexus) {
 				name: "nexus_start",
 				label: "Nexus start",
 				description:
-					"Start a Nexus thread on a project with a first message for its agent, or with claude: true for a Claude Code worker, and return its id. The agent works on its own; use nexus_wait for its reply.",
+					"Start a Nexus thread on a project with a first message for its agent, or with claude: true a Claude Code worker, and return its id. The agent works on its own; use nexus_wait for its reply.",
 				parameters: Type.Object(
 					{
 						project: Type.String(),
 						message: Type.String(),
 						title: Type.Optional(Type.String({ description: "Defaults to the first line of message" })),
-						claude: Type.Optional(Type.Boolean({ description: "Start a Claude Code worker whose first prompt is message, instead of the Nexus agent" })),
-						model: Type.Optional(Type.String({ description: "The Claude Code worker's model; needs claude: true. Defaults to Nexus's" })),
-						node: Type.Optional(Type.String({ description: "The node to run on. Defaults to the project's" })),
+						claude: Type.Optional(Type.Boolean({ description: "Start a Claude Code worker with message as its first prompt instead of the Nexus agent" })),
+						model: Type.Optional(Type.String({ description: "The Claude Code worker's model, with claude: true. Defaults to the CLI's" })),
+						node: Type.Optional(Type.String({ description: "Defaults to the project's node" })),
 					},
 					{ additionalProperties: false },
 				),
