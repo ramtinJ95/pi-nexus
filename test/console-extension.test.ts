@@ -6,7 +6,7 @@ import { addProject, createNexus, listProjects, listThreads, openSession, showTh
 import { shellQuote } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
-import { detail, display, entries, fakeTui, keybindings, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { claudeConversation, claudeDetail, claudeIdle, detail, display, entries, fakeTui, keybindings, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { fakeNexus, idA, idB, idC, reset, row, state, threads, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -565,6 +565,56 @@ describe("console", () => {
 		expect(n.text()).toContain("half-written draft");
 		n.press("q");
 		await done;
+	});
+
+	describe("a Claude worker's thread", () => {
+		const claude = (conversation = claudeConversation): Scenario => ({
+			...scenario,
+			responses: { ...scenario.responses, show: claudeDetail, conversation, send: { claude: { session: "5e55", outcome: "queued", resumed: false } } },
+			watch: [{ event: reset(idA, []) }, { event: state(idA, claudeIdle) }],
+		});
+		const reads = (n: ReturnType<typeof load>) => n.calls().filter((c) => c[0] === "conversation").length;
+
+		test("shows Claude's transcript, reads it every 2 seconds while Claude works, sends to Claude and reads after the send", async () => {
+			const n = load(claude());
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			expect(n.text()).toContain("Background task completed: the test watcher stopped");
+			expect(n.text()).toMatch(/Claude fixes the probe ● agent working/);
+			expect(n.calls().find((c) => c[0] === "conversation")).toEqual(["conversation", "--json", "--", idA]);
+			await n.until(() => reads(n) === 2, "the read 2 seconds later");
+			n.type("and the changelog");
+			await n.until(() => n.text().includes("Queued for Claude, which takes it at its next step."), "the queued note");
+			expect(n.calls().find((c) => c[0] === "send")!.slice(-2)).toEqual(["--", "and the changelog"]);
+			await n.until(() => reads(n) === 3, "the read after the send");
+			n.normal("q");
+			await done;
+		});
+
+		test("an idle Claude costs no reads until its details change", async () => {
+			const n = load(claude({ ...claudeConversation, working: false }));
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			n.normal("r");
+			await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
+			await new Promise((resolve) => setTimeout(resolve, 2_200));
+			expect(reads(n)).toBe(1);
+			n.normal("q");
+			await done;
+		});
+
+		test("a CLI too old to read the transcript says so once and stops reading", async () => {
+			const n = load({ ...claude(), version: "0.16.1" });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("needs Nexus CLI 0.17.0"), "the refusal");
+			expect(n.text().replace(/\s+/g, " ")).toContain(`Claude's transcript could not be read: ${n.bin} is 0.16.1: reading a Claude worker's transcript needs Nexus CLI 0.17.0 or later (nexus --version)`);
+			n.type("hi");
+			await n.until(() => n.calls().some((c) => c[0] === "send"), "the send");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			expect(reads(n)).toBe(0);
+			n.normal("q");
+			await done;
+		});
 	});
 
 	test("a failed send kept as a draft is retried with its request ID after going to the picker and back", async () => {

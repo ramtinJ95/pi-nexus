@@ -2,7 +2,7 @@
  * What pi-nexus makes of a Nexus thread, from the shapes in contract.ts. The settle rule, the trims and the thread
  * matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
  */
-import type { LiveRun, Part, RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
+import type { ClaudeConversation, ClaudeEntry, LiveRun, Part, RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
 
 /** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
 export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
@@ -138,6 +138,67 @@ export function keepTail(text: string, max: number): string {
 /** The CLI's rendering of each entry, newest last, kept to its last `max` characters. */
 export const transcript = (entries: readonly RenderedEntry[], max: number) =>
 	keepTail(entries.map((e) => e.text).filter(Boolean).join("\n\n") || "No messages yet.", max);
+
+/** How a prompt that did not come from the person reads, as the CLI marks it. */
+export const promptLabel = (from: string) => (from === "person" ? "" : from === "command" ? "[slash command] " : "[Claude Code] ");
+
+/**
+ * The messages Claude Code queued and has not taken, oldest first, as the control plane reads them. A removal names
+ * the message it takes by its text, or names none and takes the oldest.
+ */
+export function claudeQueued(entries: readonly ClaudeEntry[]): (string | null)[] {
+	const queued: (string | null)[] = [];
+	for (const entry of entries) {
+		if (entry.kind !== "queue") continue;
+		if (entry.op === "enqueue") queued.push(entry.text);
+		else {
+			const taken = entry.text === null ? 0 : queued.indexOf(entry.text);
+			if (taken !== -1) queued.splice(taken, 1);
+		}
+	}
+	return queued;
+}
+
+/** What a Claude worker's transcript with nothing to show says. */
+export const claudeUnwritten = (c: ClaudeConversation) =>
+	c.readAt === null ? "Claude's transcript has not been read yet. It is read while the pylon runs." : "Claude has not written a transcript yet.";
+
+/** A Claude worker's transcript as the CLI's text renders it, kept to its last `max` characters. */
+export function claudeTranscript(c: ClaudeConversation, max: number): string {
+	const results = new Map(c.entries.flatMap((e) => (e.kind === "result" ? [[e.toolUseId, e] as const] : [])));
+	const lastTurn = c.entries.map((e) => e.kind).lastIndexOf("turn");
+	const lines = c.entries.flatMap((e, i): string[] => {
+		switch (e.kind) {
+			case "prompt":
+				return [`> ${promptLabel(e.from)}${e.text.split("\n").join("\n> ")}`];
+			case "reply":
+				return [e.text];
+			case "tool": {
+				const result = results.get(e.id);
+				const how = result !== undefined ? (result.isError ? "failed" : "ok") : c.working && i > lastTurn ? "running" : "no result";
+				const input = JSON.stringify(e.input);
+				return [`[tool] ${e.name} ${input.length <= 200 ? input : `${input.slice(0, 200)}...`} (${how})`];
+			}
+			case "task":
+				return [`[task] ${e.status}: ${e.summary}`];
+			case "notice":
+				return [`[${e.tone === "error" ? "error" : "notice"}] ${e.text}`];
+			case "turn":
+				return [`[turn] ${Math.round(e.durationMs / 1000)}s`];
+			case "record":
+				return [`[record] ${e.type}: ${e.summary}`];
+			default:
+				return [];
+		}
+	});
+	const parts = [
+		...(c.dropped === 0 ? [] : [`(${c.dropped} older entries are not kept)`]),
+		...lines,
+		...claudeQueued(c.entries).map((q) => `(queued) > ${q ?? ""}`),
+		...(c.working ? ["(Claude is working)"] : []),
+	];
+	return keepTail(parts.length > 0 ? parts.join("\n\n") : claudeUnwritten(c), max);
+}
 
 export function stateLine(state: ThreadState): string {
 	const run =

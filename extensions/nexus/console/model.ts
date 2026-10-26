@@ -4,8 +4,8 @@
  * folds, the same run bar and the same reasons a thread takes no messages.
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
-import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
+import type { AssistantMessage, ClaudeConversation, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
+import { claudeUnwritten, contentText, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
 
 /** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
 export type Tone = "ok" | "work" | "busy" | "idle" | "bad" | "muted";
@@ -306,11 +306,15 @@ export type StreamingAnswer = { role: "assistant"; content: AssistantMessage["co
 
 export type ToolResult = { state: "done"; message: ToolResultMessage | ShownResult } | { state: "running"; output: string } | { state: "none" };
 
-/** One row of the conversation. A tool call carries its result, which the transcript holds in a later entry. */
+/**
+ * One row of the conversation. A tool call carries its result, which the transcript holds in a later entry. A notice
+ * is a line of a Claude worker's transcript that is no message, such as a background task that finished.
+ */
 export type Item =
 	| { kind: "user"; key: string; text: string; at: number }
 	| { kind: "assistant"; key: string; message: AssistantMessage | StreamingAnswer; streaming: boolean }
-	| { kind: "tool"; key: string; call: ToolCallPart; result: ToolResult };
+	| { kind: "tool"; key: string; call: ToolCallPart; result: ToolResult }
+	| { kind: "notice"; key: string; text: string; tone: "info" | "error" };
 export type ToolItem = Extract<Item, { kind: "tool" }>;
 
 /**
@@ -358,6 +362,52 @@ export function conversationItems(entries: readonly RenderedEntry[], live: LiveR
 		items.push({ kind: "assistant", key: "partial", message: { role: "assistant", content: [{ type: "text", text: live.partial }] }, streaming: true });
 	}
 	return items;
+}
+
+/**
+ * A Claude worker's transcript in the order it was written, as pi draws a session. A tool result pairs with its call
+ * by ID; a turn's length and the queue show nowhere here. Keys count from the first entry ever read, so an entry keeps
+ * its key while older ones are dropped. `model` is the worker's, which its replies do not name.
+ */
+export function claudeItems(c: ClaudeConversation, model: string | null): Item[] {
+	const items: Item[] = [];
+	const tools = new Map<string, ToolItem>();
+	for (const [i, e] of c.entries.entries()) {
+		const key = `claude:${c.dropped + i}`;
+		const notice = (text: string, tone: "info" | "error" = "info") => items.push({ kind: "notice", key, text, tone });
+		switch (e.kind) {
+			case "prompt":
+				items.push({ kind: "user", key, text: `${promptLabel(e.from)}${e.text}`, at: e.at });
+				break;
+			case "reply":
+				items.push({ kind: "assistant", key, message: { role: "assistant", content: [{ type: "text", text: e.text }], model: model ?? "", stopReason: "stop" }, streaming: false });
+				break;
+			case "tool": {
+				const tool: ToolItem = { kind: "tool", key, call: { type: "toolCall", id: e.id, name: e.name, arguments: e.input }, result: { state: "none" } };
+				tools.set(e.id, tool);
+				items.push(tool);
+				break;
+			}
+			case "result": {
+				const tool = tools.get(e.toolUseId);
+				if (tool !== undefined && tool.result.state === "none") tool.result = { state: "done", message: { role: "toolResult", content: [{ type: "text", text: e.output }], isError: e.isError } };
+				break;
+			}
+			case "task":
+				notice(`Background task ${e.status}: ${e.summary}`);
+				break;
+			case "notice":
+				notice(e.text, e.tone === "error" ? "error" : "info");
+				break;
+			case "record":
+				notice(`${e.type}: ${e.summary}`);
+				break;
+		}
+	}
+	return [
+		...(c.dropped === 0 ? [] : [{ kind: "notice" as const, key: "claude:dropped", text: `${c.dropped} older entries are not kept.`, tone: "info" as const }]),
+		...(items.length > 0 ? items : [{ kind: "notice" as const, key: "claude:unwritten", text: claudeUnwritten(c), tone: "info" as const }]),
+	];
 }
 
 /** A run of tool calls this long folds into one line, so a busy turn does not bury the answer around it. */
@@ -463,11 +513,12 @@ export type Run = { kind: "idle" } | { kind: "working"; since?: number; tools: n
 
 /**
  * What the agent's run is doing. A parked run is stuck, not working. A working run is timed from the message it
- * answers, since Nexus keeps no start time for a run.
+ * answers, since Nexus keeps no start time for a run. `working`, given for a Claude worker, whose watch always reports
+ * an idle run, decides instead of the state.
  */
-export function runOf(state: ThreadState | undefined, items: readonly Item[]): Run {
-	if (state?.run === "parked") return { kind: "parked", tasks: state.parkedTasks };
-	if (state?.run !== "working") return { kind: "idle" };
+export function runOf(state: ThreadState | undefined, items: readonly Item[], working?: boolean): Run {
+	if (working === undefined && state?.run === "parked") return { kind: "parked", tasks: state.parkedTasks };
+	if (!(working ?? state?.run === "working")) return { kind: "idle" };
 	const asked = items.map((i) => i.kind).lastIndexOf("user");
 	const since = asked === -1 ? undefined : (items[asked] as Extract<Item, { kind: "user" }>).at;
 	const tools = items.slice(asked + 1).filter((i) => i.kind === "tool").length;
@@ -500,7 +551,7 @@ export type Composer =
 export function composerOf(state: ThreadState | undefined, detail: ThreadDetail | undefined): Composer {
 	const status = state?.status ?? detail?.thread.status;
 	if (status === "deleted") return { kind: "closed", reason: "The thread is deleted, so its conversation is gone." };
-	if (detail?.thread.conversationId === null) return { kind: "closed", reason: "This thread has no agent conversation." };
+	if (detail?.thread.conversationId === null && detail.claudeWorker === undefined) return { kind: "closed", reason: "This thread has no agent conversation." };
 	const gaveUp = state === undefined ? (detail?.pylon.failed ?? null) : state.failed;
 	if (gaveUp !== null) return { kind: "failed", failed: gaveUp, refused: detail?.pylon.retryRefused ?? null };
 	if (status === "archived") return { kind: "archived" };

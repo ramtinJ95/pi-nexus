@@ -19,6 +19,7 @@ import {
 	openSession,
 	previewPort,
 	readChanges,
+	readConversation,
 	readDiff,
 	sendText,
 	showThread,
@@ -41,6 +42,8 @@ import type { Display } from "./transcript.ts";
 
 const pickerEveryMs = 5_000;
 const detailEveryMs = 10_000;
+/** How often a Claude worker's transcript is read while its turn runs, as the dashboard reads it. */
+const claudeEveryMs = 2_000;
 /** The most often a thread redraws: a streaming answer prints a live event up to ten times a second. */
 const drawEveryMs = 100;
 
@@ -407,6 +410,45 @@ export class Console {
 				this.warn(`pi-nexus could not mark ${thread}'s reply seen, so it still shows as new in every client: ${message(err)}`);
 			});
 		};
+		/**
+		 * A Claude worker's transcript, which the watch never streams, read one read at a time: at once, every
+		 * `claudeEveryMs` while its turn runs, and otherwise only when the details or a send say something changed, since
+		 * each read makes the control plane read the pylon. A failure says so once, and a CLI too old to read it ends the
+		 * reading.
+		 */
+		let claudeRead: { again: boolean } | undefined;
+		let claudeTimer: ReturnType<typeof setTimeout> | undefined;
+		let claudeFailed = false;
+		let claudeStopped = false;
+		let claudeSeen: string | undefined;
+		const readClaude = async (): Promise<void> => {
+			if (claudeStopped || signal.aborted) return;
+			if (claudeRead !== undefined) return void (claudeRead.again = true);
+			const read = (claudeRead = { again: false });
+			clearTimeout(claudeTimer);
+			try {
+				const conversation = await readConversation(nexus, thread, signal);
+				if (signal.aborted) return;
+				screen.setConversation(conversation);
+				if (conversation.working) claudeTimer = setTimeout(() => void readClaude(), claudeEveryMs);
+			} catch (err) {
+				if (signal.aborted) return;
+				if (!claudeFailed) screen.say(`Claude's transcript could not be read: ${message(err)}`, true);
+				claudeFailed = true;
+				if (err instanceof NexusError && err.kind === "invalid") claudeStopped = true;
+			} finally {
+				claudeRead = undefined;
+				if (read.again) void readClaude();
+			}
+		};
+		/** Reads the transcript again when the details show a turn ended, its attention or the pylon changed. */
+		const claudeChanged = (detail: ThreadDetail) => {
+			if (detail.claudeWorker === undefined) return;
+			const seen = JSON.stringify([detail.lastReplyAt, detail.attention, detail.thread.lastAgentActivityAt, detail.thread.status, detail.pylon.actualState]);
+			if (seen === claudeSeen) return;
+			claudeSeen = seen;
+			void readClaude();
+		};
 		const refreshDetail = async () => {
 			const current = begin();
 			const askedAt = screen.mark();
@@ -415,6 +457,7 @@ export class Console {
 				if (!signal.aborted && current()) {
 					screen.setDetail(detail, askedAt);
 					markRead(detail);
+					claudeChanged(detail);
 				}
 			} catch (err) {
 				// The watch reports an outage itself.
@@ -447,7 +490,9 @@ export class Console {
 			},
 			actions: {
 				async send(text, steer, requestId) {
-					await sendText(nexus, thread, text, steer, signal, requestId);
+					const sent = await sendText(nexus, thread, text, steer, signal, requestId);
+					if ("claude" in sent) void readClaude();
+					return sent;
 				},
 				async act(action: Action) {
 					await nexus.run([action, thread], signal);
@@ -497,6 +542,7 @@ export class Console {
 		return Object.assign(screen, {
 			dispose() {
 				clearInterval(timer);
+				clearTimeout(claudeTimer);
 				redraw.cancel();
 				stop.abort();
 				disposeScreen();

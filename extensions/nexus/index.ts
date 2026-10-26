@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
+import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readConversation, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
 import { attachCommand, attachHint, chips, pausedRefusal, sessionLook, sessionName, sessionPlace, summary } from "./console/model.ts";
@@ -9,7 +9,7 @@ import { follow, type FollowEnd } from "./follow.ts";
 import { noteType, renderNote, type Note } from "./render.ts";
 import { nexusTools } from "./tools.ts";
 import { harnesses, type ThreadRow } from "./contract.ts";
-import { emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
+import { claudeTranscript, emptyView, findThread, NexusError, stateLine, threadRows, transcript, type ThreadView } from "./thread.ts";
 import { inScope, Scope } from "./scope.ts";
 import { defaultSettingsFile, forgetLooks, settingsFile, type SettingsStore } from "./store.ts";
 
@@ -201,21 +201,34 @@ class NexusSession {
 			}
 			case "send": {
 				const thread = await id(command.thread);
-				await sendText(nexus, thread, command.text, false, signal);
-				ctx.ui.notify(`Sent to ${thread}.`, "info");
-				return this.startFollow(thread, false);
+				const sent = await sendText(nexus, thread, command.text, false, signal);
+				if (!("claude" in sent)) {
+					ctx.ui.notify(`Sent to ${thread}.`, "info");
+					return this.startFollow(thread, false);
+				}
+				// A watch never sees a Claude worker's reply, so nothing follows it.
+				const { outcome, resumed } = sent.claude;
+				const done = outcome === "queued" ? `Queued for Claude in ${thread}, which takes it at its next step.` : `Sent to Claude in ${thread}.`;
+				return ctx.ui.notify(`${done}${resumed ? " Its session was resumed to take it." : ""} /nexus open ${thread} shows its transcript.`, "info");
 			}
 			case "show": {
 				const thread = await id(command.thread);
-				const view = await readThread(nexus, thread, signal);
 				const title = this.threads.find((t) => t.id === thread)?.title;
-				return this.note({
-					title: `${thread}${title ? ` ${title}` : ""}: ${stateLine(view.state)}`,
-					body: transcript(view.entries, 20_000),
-				});
+				const heading = (line: string) => `${thread}${title ? ` ${title}` : ""}: ${line}`;
+				if ((await showThread(nexus, thread, signal)).claudeWorker !== undefined) {
+					const [view, conversation] = await Promise.all([readThread(nexus, thread, signal), readConversation(nexus, thread, signal)]);
+					return this.note({ title: heading(stateLine({ ...view.state, run: conversation.working ? "working" : "idle" })), body: claudeTranscript(conversation, 20_000) });
+				}
+				const view = await readThread(nexus, thread, signal);
+				return this.note({ title: heading(stateLine(view.state)), body: transcript(view.entries, 20_000) });
 			}
-			case "follow":
-				return this.startFollow(await id(command.thread), true);
+			case "follow": {
+				const thread = await id(command.thread);
+				if ((await showThread(nexus, thread, signal)).claudeWorker !== undefined) {
+					throw new NexusError("invalid", `nexus watch does not stream a Claude worker's transcript, so ${thread} cannot be followed. /nexus open ${thread} shows it.`);
+				}
+				return this.startFollow(thread, true);
+			}
 			case "unfollow": {
 				// Matched against the follows themselves, so an unfollow works while Nexus is down.
 				const thread = command.thread === undefined ? undefined : findThread(command.thread, [...this.follows.keys()]);

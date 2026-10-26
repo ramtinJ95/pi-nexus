@@ -3,9 +3,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Action } from "../extensions/nexus/commands.ts";
 import { ThreadScreen, type ScreenEnd } from "../extensions/nexus/console/thread-screen.ts";
-import type { OpenedSession, Preview, RenderedEntry, Session, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
+import type { OpenedSession, Preview, RenderedEntry, Sent, Session, ThreadDetail, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { reduce, type ThreadView } from "../extensions/nexus/thread.ts";
-import { asked, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { asked, claudeConversation, claudeDetail, claudeIdle, detail, display, entries, ports, webPreview, fakeTui, keybindings, live, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { idA, idle } from "./fixtures.ts";
 
 /** The note a second change of port 8080 gets while one runs, as every entry point says it. */
@@ -43,6 +43,7 @@ function open(
 		attachFails = undefined as Error | undefined,
 		closeFails = undefined as Error | undefined,
 		cli = "nexus",
+		reply = { submission: 1 } as Sent,
 	} = {},
 ) {
 	const sent: { text: string; steer: boolean; requestId: string }[] = [];
@@ -79,6 +80,7 @@ function open(
 			async send(text, steer, requestId) {
 				sent.push({ text, steer, requestId });
 				if (failures-- > 0) throw new Error("Nexus is unreachable");
+				return reply;
 			},
 			async act(action) {
 				acted.push(action);
@@ -147,6 +149,64 @@ function open(
 	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
 	return { tick: (ms: number) => (clock += ms), screen, tui, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
 }
+
+describe("a Claude worker's thread", () => {
+	const claude = (reply?: Sent) => {
+		const s = open({ entries: [], state: claudeIdle }, { shown: claudeDetail, ...(reply === undefined ? {} : { reply }) });
+		s.screen.setConversation(claudeConversation);
+		return s;
+	};
+
+	test("draws Claude's transcript, its work and its queue, and names its model", () => {
+		const s = claude();
+		const out = s.text();
+		expect(out).toContain("Fix the retry in probe.ts so it backs off.");
+		expect(out).toContain("I'll read the probe first.");
+		expect(out).toMatch(/Read\s+\{\s+"file_path": "\/home\/user\/workspace\/repo\/src\/probe.ts"/);
+		expect(out).toContain("export async function probe(url: string) {");
+		expect(out).toMatch(/Bash\s+\{\s+"command": "npm test"/);
+		expect(out).toContain("Background task completed: the test watcher stopped");
+		expect(out).toContain("The model request was interrupted.");
+		expect(out).toContain("Queued: also update the docs");
+		expect(out).toMatch(/Claude fixes the probe ● agent working/);
+		expect(out).toMatch(/Working · 1m 12s · 2 tools this turn/);
+		expect(plain(s.screen.render(140))).toMatch(/1 output +Claude Code · claude-opus-5-5\n/);
+		expect(out).not.toContain("This thread has no agent conversation.");
+	});
+
+	test("an idle Claude shows no run, and a transcript with nothing in it says why", () => {
+		const s = claude();
+		s.screen.setConversation({ ...claudeConversation, working: false });
+		expect(s.text()).not.toContain("Working ·");
+		expect(s.text()).toMatch(/Claude fixes the probe ● running/);
+		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: null, working: false });
+		expect(s.text()).toContain("Claude's transcript has not been read yet. It is read while the pylon runs.");
+		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: asked, working: false });
+		expect(s.text()).toContain("Claude has not written a transcript yet.");
+		s.screen.setConversation({ ...claudeConversation, dropped: 40 });
+		expect(s.text()).toContain("40 older entries are not kept.");
+	});
+
+	test("the composer sends to Claude and says when Claude queued the message", async () => {
+		const s = claude({ claude: { session: "5e55", outcome: "queued", resumed: true } });
+		await s.type("and the changelog");
+		expect(s.sent.map((m) => m.text)).toEqual(["and the changelog"]);
+		expect(s.text()).toContain("Queued for Claude, which takes it at its next step. Its session was resumed to take it.");
+		const idle = claude({ claude: { session: "5e55", outcome: "sent", resumed: false } });
+		await idle.type("/steer look at the docs too");
+		expect(idle.sent.map((m) => m.text)).toEqual(["look at the docs too"]);
+		expect(idle.text()).toContain("Sent to Claude.");
+	});
+
+	test("the actions leave out abort and retry, which the harness has for Claude", () => {
+		const s = claude();
+		s.normal("m");
+		const out = s.text();
+		expect(out).toContain("Archive");
+		expect(out).not.toContain("Abort the run");
+		expect(out).not.toContain("Retry the parked tasks");
+	});
+});
 
 describe("thread view", () => {
 	test("draws the conversation with pi's components, the run in the editor's border and the footer", () => {

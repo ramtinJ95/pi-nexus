@@ -23,8 +23,8 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { Action } from "../commands.ts";
-import type { Base, NodeSummary, OpenedSession, Preview, Session, ThreadDetail } from "../contract.ts";
-import { portBusy, type ThreadView } from "../thread.ts";
+import type { Base, ClaudeConversation, NodeSummary, OpenedSession, Preview, Sent, Session, ThreadDetail } from "../contract.ts";
+import { claudeQueued, portBusy, type ThreadView } from "../thread.ts";
 import { detailLines, portLines, sessionLines } from "./inspector.ts";
 import { Checkout, changesLines, type CheckoutActions } from "./changes.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
@@ -34,6 +34,7 @@ import {
 	attachCommand,
 	badge,
 	blocks,
+	claudeItems,
 	composerOf,
 	conversationItems,
 	failedText,
@@ -69,7 +70,7 @@ const opening = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
 
 export interface ScreenActions {
 	/** `requestId` is the same for a retry of the same text, so the API takes both as one message. */
-	send(text: string, steer: boolean, requestId: string): Promise<void>;
+	send(text: string, steer: boolean, requestId: string): Promise<Sent>;
 	act(action: Action): Promise<void>;
 	/** Publishes `port` of the pylon as a preview, and resolves once the node serves it. */
 	preview(port: number): Promise<Preview>;
@@ -214,6 +215,8 @@ const menuKeys: readonly Binding<MenuCommand>[] = [
 type MenuEntry = Action | "start-again" | "copy-attach" | "open-session" | "attach" | "rewatch";
 interface MenuState {
 	unwatched: boolean;
+	/** A Claude worker's thread, whose run the harness's abort and retry do not reach. */
+	claude: boolean;
 	working: boolean;
 	parked: boolean;
 	composer: Composer;
@@ -222,8 +225,8 @@ interface MenuState {
 }
 const menuEntries: readonly { entry: MenuEntry; label: string; description: string; when(s: MenuState): boolean }[] = [
 	{ entry: "rewatch", label: "Watch again", description: "follow the thread again after its watch ended", when: (s) => s.unwatched },
-	{ entry: "abort", label: "Abort the run", description: "abort the agent's run", when: (s) => s.working },
-	{ entry: "retry", label: "Retry the parked tasks", description: "run the parked tasks again", when: (s) => s.parked },
+	{ entry: "abort", label: "Abort the run", description: "abort the agent's run", when: (s) => s.working && !s.claude },
+	{ entry: "retry", label: "Retry the parked tasks", description: "run the parked tasks again", when: (s) => s.parked && !s.claude },
 	{ entry: "retry-pylon", label: "Retry the pylon", description: "boot a failed pylon again", when: (s) => s.composer.kind === "failed" },
 	{ entry: "start-again", label: "Start again", description: "a new thread on the same project", when: (s) => s.loaded },
 	{ entry: "archive", label: "Archive", description: "archive the thread, which pauses its pylon", when: (s) => s.status !== "archived" && s.status !== "deleted" },
@@ -328,6 +331,8 @@ export class ThreadScreen implements Component, Focusable {
 	private readonly menuReader = new KeyReader(menuKeys);
 	private view: ThreadView = { entries: [] };
 	private detail: ThreadDetail | undefined;
+	/** A Claude worker's transcript as last read, which the watch never streams. */
+	private claude: ClaudeConversation | undefined;
 	/** The last mark handed out, and the one the shown details were asked for at. */
 	private marks = 0;
 	private askedAt = 0;
@@ -430,6 +435,17 @@ export class ThreadScreen implements Component, Focusable {
 		this.rebuild();
 	}
 
+	/** Whether the thread's worker is Claude Code, so its conversation and run come from its transcript. */
+	private get isClaude(): boolean {
+		return this.detail?.claudeWorker !== undefined;
+	}
+
+	setConversation(conversation: ClaudeConversation): void {
+		this.claude = conversation;
+		this.checkoutFacts();
+		this.rebuild();
+	}
+
 	private checkoutFacts(): void {
 		const s = this.unwatched || this.checkoutWatchStale ? undefined : this.view.state, d = this.detail;
 		// A checkout read wakes a pylon: neither current source may overrule the other's non-running report.
@@ -437,7 +453,7 @@ export class ThreadScreen implements Component, Focusable {
 		const statuses = [s?.status, d?.thread.status];
 		const status = statuses.includes("deleted") ? "deleted" : statuses.includes("archived") ? "archived" : s?.status ?? d?.thread.status ?? "unknown";
 		this.checkout.update({ status, pylon: pylons.find((p) => p !== "running") ?? pylons[0] ?? "unknown",
-			working: s ? s.run === "working" : d?.thread.agentTurnRunning ?? false, agentAt: Math.max(d?.thread.lastAgentActivityAt ?? 0, d?.lastReplyAt ?? 0) });
+			working: (s ? s.run === "working" : d?.thread.agentTurnRunning ?? false) || this.claude?.working === true, agentAt: Math.max(d?.thread.lastAgentActivityAt ?? 0, d?.lastReplyAt ?? 0) });
 	}
 
 	/**
@@ -463,8 +479,20 @@ export class ThreadScreen implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
+	/** The conversation's rows: the watch's entries, or a Claude worker's transcript once it is read. */
+	private items() {
+		if (!this.isClaude) return conversationItems(this.view.entries, this.view.live);
+		return this.claude === undefined ? [] : claudeItems(this.claude, this.detail!.claudeWorker!.model);
+	}
+
+	/** The run, which for a Claude worker its transcript says, as the watch reports its run idle. */
+	private runNow(items = this.items()) {
+		return this.isClaude ? runOf(this.view.state, items, this.claude?.working ?? false) : runOf(this.view.state, items);
+	}
+
 	private rebuild(): void {
-		this.body = this.transcript.build(blocks(conversationItems(this.view.entries, this.view.live)));
+		this.transcript.piTools = !this.isClaude;
+		this.body = this.transcript.build(blocks(this.items()));
 		this.updateStatus();
 		this.tui.requestRender();
 	}
@@ -476,7 +504,7 @@ export class ThreadScreen implements Component, Focusable {
 	/** The run's status in the editor's border: working with its clock, or a model request waiting for its retry. */
 	private updateStatus(): void {
 		const { state, live } = this.view;
-		const run = runOf(state, conversationItems(this.view.entries, live));
+		const run = this.runNow();
 		const want = live?.retry ? "retry" : run.kind === "working" ? "working" : undefined;
 		if (this.status?.kind !== want) {
 			this.status?.component.dispose();
@@ -586,7 +614,8 @@ export class ThreadScreen implements Component, Focusable {
 	/**
 	 * Sends or, while the run is busy, queues `text`. Sending the same text the same way again after a failure reuses
 	 * its request ID, so a send whose reply was lost is not taken twice. The API keeps the first send's mode for an ID
-	 * it has seen, so steering text first sent as a follow-up is a new message. A failed send puts the text back.
+	 * it has seen, so steering text first sent as a follow-up is a new message. A failed send puts the text back. Claude
+	 * takes either mode alike, and a send to it says whether it queued the message.
 	 */
 	private async send(text: string, steer: boolean): Promise<void> {
 		const refused = this.refusal(this.composer());
@@ -605,10 +634,14 @@ export class ThreadScreen implements Component, Focusable {
 		outgoing.inFlight = true;
 		this.editor.disableSubmit = true;
 		try {
-			await this.options.actions.send(text, steer, outgoing.requestId);
+			const sent = await this.options.actions.send(text, steer, outgoing.requestId);
 			this.editor.addToHistory(steer ? `/steer ${text}` : text);
 			this.outgoing = undefined;
 			this.scrolls.conversation.following = true;
+			if ("claude" in sent) {
+				const { outcome, resumed } = sent.claude;
+				this.say(`${outcome === "queued" ? "Queued for Claude, which takes it at its next step." : "Sent to Claude."}${resumed ? " Its session was resumed to take it." : ""}`);
+			}
 		} catch (err) {
 			outgoing.inFlight = false;
 			restore();
@@ -843,9 +876,10 @@ export class ThreadScreen implements Component, Focusable {
 	}
 
 	private openActions(): void {
-		const run = runOf(this.view.state, []);
+		const run = this.runNow([]);
 		const state: MenuState = {
 			unwatched: this.unwatched,
+			claude: this.isClaude,
 			working: run.kind === "working",
 			parked: run.kind === "parked",
 			composer: this.composer(),
@@ -1075,7 +1109,7 @@ export class ThreadScreen implements Component, Focusable {
 		const wrap = (text: string, color: "error" | "warning" | "muted" | "dim") =>
 			wrapTextWithAnsi(text, Math.max(10, width - 2 * pad.length)).map((line) => pad + t.fg(color, line));
 		const out: string[] = [];
-		const queued = this.view.live?.queued ?? [];
+		const queued = this.isClaude ? claudeQueued(this.claude?.entries ?? []).map((q) => q ?? "") : (this.view.live?.queued ?? []);
 		if (queued.length > 0) {
 			const shown = queued.slice(0, queuedShown).map((q) => truncateToWidth(pad + t.fg("dim", `Queued: ${q.replace(/\s+/g, " ")}`), width));
 			const more = queued.length - queuedShown;
@@ -1124,7 +1158,8 @@ export class ThreadScreen implements Component, Focusable {
 			parts.push(`${previews} ${previews === 1 ? "preview" : "previews"}`, `${outputs} ${outputs === 1 ? "output" : "outputs"}`);
 		}
 		const left = parts.join(" · ");
-		const model = modelOf(this.view.entries) ?? "";
+		const worker = d?.claudeWorker;
+		const model = worker === undefined ? (modelOf(this.view.entries) ?? "") : `Claude Code · ${worker.model ?? "unknown"}`;
 		const room = width - visibleWidth(left) - visibleWidth(model);
 		const line2 = room >= 2 ? `${left}${" ".repeat(room)}${model}` : left;
 		return [truncateToWidth(t.fg("dim", line2), width), this.hints(width)];
@@ -1133,8 +1168,8 @@ export class ThreadScreen implements Component, Focusable {
 	private titleLine(width: number): string {
 		const d = this.detail, t = this.theme;
 		if (!d) return t.fg("dim", this.options.thread);
-		const [label, tone] = threadState({ ...d.thread, status: this.view.state?.status ?? d.thread.status,
-			agentTurnRunning: this.view.state ? this.view.state.run === "working" : d.thread.agentTurnRunning }, this.view.state?.pylon ?? d.pylon.actualState);
+		const working = this.isClaude ? (this.claude?.working ?? d.attention === "working") : this.view.state ? this.view.state.run === "working" : d.thread.agentTurnRunning;
+		const [label, tone] = threadState({ ...d.thread, status: this.view.state?.status ?? d.thread.status }, this.view.state?.pylon ?? d.pylon.actualState, working);
 		return truncateToWidth(` ${d.thread.project} / ${t.bold(d.thread.title)} ${t.fg(toneColor[tone], `● ${label}`)} ${t.fg("dim", `(${this.options.thread})`)}`, width);
 	}
 

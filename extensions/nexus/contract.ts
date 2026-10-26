@@ -196,7 +196,7 @@ export const Seen = Type.Null();
 /** Each entry kind of a Claude worker's transcript that pi-nexus shows. */
 export const claudeEntries = {
 	/** `from` is `person`, `command` for a slash command, or another source, such as a plugin. */
-	prompt: Type.Object({ kind: Type.Literal("prompt"), text: Type.String(), from: Type.String() }),
+	prompt: Type.Object({ kind: Type.Literal("prompt"), at: Type.Number(), text: Type.String(), from: Type.String() }),
 	reply: Type.Object({ kind: Type.Literal("reply"), text: Type.String() }),
 	tool: Type.Object({ kind: Type.Literal("tool"), id: Type.String(), name: Type.String(), input: Type.Record(Type.String(), Type.Unknown()) }),
 	result: Type.Object({ kind: Type.Literal("result"), toolUseId: Type.String(), output: Type.String(), isError: Type.Boolean() }),
