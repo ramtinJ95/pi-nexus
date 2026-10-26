@@ -222,13 +222,19 @@ export async function readDiff(nexus: Nexus, thread: string, paths: readonly str
 }
 
 /**
- * Marks the thread's latest reply seen, for every client, which needs CLI 0.10.0. It never wakes a pylon and is not
- * human activity.
+ * Marks the reply that ended at `shown`, the one a client showed, seen for every client, which needs CLI 0.10.0. It
+ * never wakes a pylon and is not human activity. CLI 0.19.0 marks only up to `shown`, so a reply that lands after it
+ * stays unread. An older CLI marks the latest reply, so the details are read again first and a newer reply skips the
+ * mark; one that lands between that read and the mark is marked too.
  */
-export async function markSeen(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<void> {
+export async function markSeen(nexus: Nexus, thread: string, shown: number, signal?: AbortSignal): Promise<void> {
 	await requireVersion(nexus, [0, 10, 0], "marking a reply seen", signal);
-	// The API takes the shown reply's lastReplyAt, so a reply that lands after the caller's check stays unread; once
-	// the CLI has a flag for it, such as --last-reply-at, pass the shown reply here.
+	if (await hasVersion(nexus, [0, 19, 0], signal)) {
+		parse(Seen, await nexus.run(["seen", `--last-reply-at=${shown}`, "--", thread], signal), "nexus seen");
+		return;
+	}
+	const now = await showThread(nexus, thread, signal);
+	if (now.lastReplyAt !== shown || (now.seenAt !== null && now.seenAt >= shown)) return;
 	parse(Seen, await nexus.run(["seen", "--", thread], signal), "nexus seen");
 }
 
@@ -368,6 +374,18 @@ export const isOlder = (version: readonly number[], than: readonly number[]) => 
  * refusal is read again rather than refused from memory.
  */
 const versionsRead = new WeakMap<Nexus, Map<string, number[]>>();
+
+/** Whether the CLI is `needed` or later. One whose version cannot be read is not. */
+async function hasVersion(nexus: Nexus, needed: readonly number[], signal?: AbortSignal): Promise<boolean> {
+	const wanted = needed.join(".");
+	const known = versionsRead.get(nexus) ?? new Map<string, number[]>();
+	versionsRead.set(nexus, known);
+	if (known.has(wanted)) return true;
+	const version = parseVersion(await nexus.version(signal));
+	if (version === null || isOlder(version, needed)) return false;
+	known.set(wanted, version);
+	return true;
+}
 
 /**
  * Fails unless the CLI is `needed` or later, saying which version `doing` needs. A version that cannot be read
