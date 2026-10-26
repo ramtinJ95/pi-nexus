@@ -59,6 +59,7 @@ function open(
 	const ends: ScreenEnd[] = [];
 	let failures = sendFails;
 	let refreshes = 0;
+	const marks: number[] = [];
 	let rewatches = 0;
 	const tui = fakeTui(rows, 100);
 	let clock = asked + 72_000;
@@ -84,6 +85,9 @@ function open(
 			},
 			async act(action) {
 				acted.push(action);
+			},
+			shown(reply) {
+				marks.push(reply);
 			},
 			async preview(port) {
 				previewed.push(port);
@@ -147,13 +151,13 @@ function open(
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 	/** Details as the console reads them, asked for now or at the earlier mark `askedAt`. */
 	const details = (d: ThreadDetail, askedAt = screen.mark()) => screen.setDetail(d, askedAt);
-	return { tick: (ms: number) => (clock += ms), screen, tui, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
+	return { tick: (ms: number) => (clock += ms), screen, tui, marks, sent, acted, previewed, unpublished, copied, sessionsOpened, sessionsClosed, attaches: () => attaches, ends, text, mode, type, normal, settle, details, refreshes: () => refreshes, rewatches: () => rewatches, release: () => release(), press: (...input: string[]) => input.forEach((k) => screen.handleInput(k)) };
 }
 
 describe("a Claude worker's thread", () => {
 	const claude = (reply?: Sent) => {
 		const s = open({ entries: [], state: claudeIdle }, { shown: claudeDetail, ...(reply === undefined ? {} : { reply }) });
-		s.screen.setConversation(claudeConversation);
+		s.screen.setConversation(claudeConversation, claudeDetail.lastReplyAt);
 		return s;
 	};
 
@@ -176,14 +180,14 @@ describe("a Claude worker's thread", () => {
 
 	test("an idle Claude shows no run, and a transcript with nothing in it says why", () => {
 		const s = claude();
-		s.screen.setConversation({ ...claudeConversation, working: false });
+		s.screen.setConversation({ ...claudeConversation, working: false }, claudeDetail.lastReplyAt);
 		expect(s.text()).not.toContain("Working ·");
 		expect(s.text()).toMatch(/Claude fixes the probe ● running/);
-		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: null, working: false });
+		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: null, working: false }, claudeDetail.lastReplyAt);
 		expect(s.text()).toContain("Claude's transcript has not been read yet. It is read while the pylon runs.");
-		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: asked, working: false });
+		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: asked, working: false }, claudeDetail.lastReplyAt);
 		expect(s.text()).toContain("Claude has not written a transcript yet.");
-		s.screen.setConversation({ ...claudeConversation, dropped: 40 });
+		s.screen.setConversation({ ...claudeConversation, dropped: 40 }, claudeDetail.lastReplyAt);
 		expect(s.text()).toContain("40 older entries are not kept.");
 	});
 

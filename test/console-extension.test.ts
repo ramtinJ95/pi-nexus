@@ -19,6 +19,9 @@ const scenario: Scenario = {
 	watchHold: true,
 };
 
+/** A watch whose agent has answered, so the reply its details name is the one the conversation shows. */
+const answered: Scenario["watch"] = [{ event: reset(idA, entries) }, { event: state(idA, claudeIdle) }];
+
 /** The detail with port 8080 published on its own, beside the web service's preview. */
 const own = { service: "port-8080", ready: true, url: "https://firebat.example.ts.net:8445/" };
 const published = { ...detail, previews: [...detail.previews, own], ports: detail.ports!.map((p) => (p.port === 8080 ? { ...p, preview: own } : p)) };
@@ -426,7 +429,7 @@ describe("console", () => {
 		const list = [threads[0], row(idB, { attention: "reply", lastReplyAt: 2_000 }), row(idC, { attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "boom" } }), claude];
 		const seen = [threads[0], row(idB, { seenAt: 2_000, lastReplyAt: 2_000 }), list[2], claude];
 		const unread = { ...detail, lastReplyAt: 2_000, attention: "reply" };
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list, show: unread, seen: null }, after: { seen: { threads: seen } } });
+		const n = load({ ...scenario, watch: answered, responses: { ...scenario.responses, threads: list, show: unread, seen: null }, after: { seen: { threads: seen } } });
 		await n.run("list");
 		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you · 1 new", "the summary");
 		const done = n.run(`open ${idB}`);
@@ -439,6 +442,28 @@ describe("console", () => {
 		expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--", idB]]);
 	});
 
+	test("a reply is not marked seen while a turn runs or another view is open", async () => {
+		const unread = { ...detail, lastReplyAt: 2_000, attention: "reply" };
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: unread, seen: null } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the working thread");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+		n.normal("q");
+		await done;
+
+		const later = load({ ...scenario, watch: [{ event: reset(idA, entries) }, { event: state(idA, working), delayMs: 0 }, { event: state(idA, claudeIdle), delayMs: 1_500 }], responses: { ...scenario.responses, show: unread, seen: null } });
+		const shut = later.run(`open ${idA}`);
+		await later.until(() => later.shown.length === 1 && later.text().includes("Fix the probe retry"), "the working thread");
+		later.normal("2");
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		expect(later.calls().some((c) => c[0] === "seen")).toBe(false);
+		later.normal("1");
+		await later.until(() => later.calls().some((c) => c[0] === "seen"), "the mark once Conversation shows the reply");
+		later.normal("q");
+		await shut;
+	});
+
 	test("a thread whose reply was seen, here or in another client, is not marked again", async () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
 		const done = n.run(`open ${idA}`);
@@ -449,7 +474,7 @@ describe("console", () => {
 	});
 
 	test("a CLI older than 0.10.0 cannot mark a reply seen, which one warning says", async () => {
-		const n = load({ ...scenario, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
+		const n = load({ ...scenario, watch: answered, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
 		const done = n.run(`open ${idA}`);
 		await n.until(() => n.notified.some(([, level]) => level === "warning"), "the warning");
 		n.normal("r");
@@ -591,14 +616,72 @@ describe("console", () => {
 			await done;
 		});
 
-		test("an idle Claude costs no reads until its details change", async () => {
+		test("an idle Claude costs no reads until its details change, and r reads it again", async () => {
 			const n = load(claude({ ...claudeConversation, working: false }));
 			const done = n.run(`open ${idA}`);
 			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
-			n.normal("r");
-			await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
 			await new Promise((resolve) => setTimeout(resolve, 2_200));
 			expect(reads(n)).toBe(1);
+			n.normal("r");
+			await n.until(() => reads(n) === 2, "the read r asks for");
+			await new Promise((resolve) => setTimeout(resolve, 2_200));
+			expect(reads(n)).toBe(2);
+			n.normal("q");
+			await done;
+		});
+
+		test("a reply is marked seen only once its transcript shows, and only while the details still name it", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const idle = claude({ ...claudeConversation, working: false });
+			const failing = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer" } } });
+			const shut = failing.run(`open ${idA}`);
+			await failing.until(() => failing.shown.length === 1 && failing.text().includes("Claude's transcript could not be read: the pylon did not answer"), "the failed read");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(failing.calls().some((c) => c[0] === "seen")).toBe(false);
+			failing.normal("q");
+			await shut;
+
+			const n = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+			const calls = n.calls().map((c) => c[0]);
+			expect(calls.indexOf("conversation")).toBeLessThan(calls.indexOf("seen"));
+			n.normal("q");
+			await done;
+		});
+
+		test("a newer reply than the transcript shown skips the mark", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const idle = claude({ ...claudeConversation, working: false });
+			const n = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, after: { conversation: { show: { ...unread, lastReplyAt: 3_000 } } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first.") && n.calls().filter((c) => c[0] === "show").length >= 2, "the check before the mark");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+			n.normal("q");
+			await done;
+		});
+
+		test("a failed read is tried again, and says so once", async () => {
+			const n = load({ ...claude(), fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer", times: 1 } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript after the retry");
+			expect(n.text()).toContain("Claude's transcript could not be read: the pylon did not answer");
+			n.normal("q");
+			await done;
+		});
+
+		test("nothing is read while the terminal is attached, and the transcript is read again after", async () => {
+			const n = load({ ...claude(), delayMs: { attach: 3_000 } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => reads(n) === 1, "the first read");
+			n.normal("4");
+			n.press("\r");
+			await n.until(() => n.calls().some((c) => c[0] === "attach"), "the attach");
+			const during = reads(n);
+			await new Promise((resolve) => setTimeout(resolve, 2_500));
+			expect(reads(n)).toBe(during);
+			await n.until(() => reads(n) > during, "the read after the attach");
 			n.normal("q");
 			await done;
 		});

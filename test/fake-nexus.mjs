@@ -13,8 +13,12 @@ const answered = `${process.env.FAKE_NEXUS}.answered`;
 const ran = existsSync(answered) ? readFileSync(answered, "utf8").split("\n") : [];
 const responses = Object.assign({}, scenario.responses, ...Object.entries(scenario.after ?? {}).flatMap(([c, r]) => (ran.includes(c) ? [r] : [])));
 
-const fail = scenario.fail?.[command];
+// A failure with `times` fails only that many runs of its command, as a read that fails and then works.
+const failed = `${process.env.FAKE_NEXUS}.failed`;
+const fails = existsSync(failed) ? readFileSync(failed, "utf8").split("\n").filter((c) => c === command).length : 0;
+const fail = scenario.fail?.[command] && (scenario.fail[command].times === undefined || fails < scenario.fail[command].times) ? scenario.fail[command] : undefined;
 if (fail) {
+	appendFileSync(failed, `${command}\n`);
 	process.stderr.write(fail.stderr ?? `${JSON.stringify({ error: fail.error, kind: fail.kind, status: null })}\n`);
 	process.exit(fail.exit);
 }

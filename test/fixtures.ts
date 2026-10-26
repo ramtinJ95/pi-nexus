@@ -56,7 +56,8 @@ export interface Scenario {
 	responses?: Record<string, unknown>;
 	/** Replies that replace `responses` once the command they are under has answered. */
 	after?: Record<string, Record<string, unknown>>;
-	fail?: Record<string, { exit: number; kind?: string; error?: string; stderr?: string }>;
+	/** `times` fails only that many runs of the command. */
+	fail?: Record<string, { exit: number; kind?: string; error?: string; stderr?: string; times?: number }>;
 	watch?: { event: WatchEvent | string; delayMs?: number }[];
 	watchHold?: boolean;
 	watchExitDelayMs?: number;

@@ -44,6 +44,8 @@ const pickerEveryMs = 5_000;
 const detailEveryMs = 10_000;
 /** How often a Claude worker's transcript is read while its turn runs, as the dashboard reads it. */
 const claudeEveryMs = 2_000;
+/** The longest a failed read of the transcript waits before it is tried again. */
+const claudeRetryMaxMs = 60_000;
 /** The most often a thread redraws: a streaming answer prints a live event up to ten times a second. */
 const drawEveryMs = 100;
 
@@ -394,48 +396,72 @@ export class Console {
 		const nexus = this.nexus;
 		let view: ThreadView = emptyView;
 		const begin = inOrder();
-		/** The latest reply a mark went out for, and whether a mark failed, which ends the marking for this view. */
+		/** The details last read, whose reply a transcript read about to start covers. */
+		let latest: ThreadDetail | undefined;
+		/** The latest reply a mark went out for, and whether a mark failed for a reason trying again cannot fix. */
 		let marked: number | null = null;
+		let marking = false;
 		let markFailed = false;
+		/** When a mark that failed in an outage may be tried again, since every draw of the shown reply asks for one. */
+		let markAfter = 0;
 		/**
-		 * Marks the shown reply seen, for every client. The session's signal, not the view's, ends it, so leaving the
-		 * thread does not abort a mark under way.
+		 * Marks `reply` seen, for every client, once the view has shown it. The details are read again first, and a newer
+		 * reply than the one shown skips the mark, which that reply's own showing makes. The session's signal, not the
+		 * view's, ends it, so leaving the thread does not abort a mark under way.
 		 */
-		const markRead = (detail: ThreadDetail) => {
-			if (markFailed || !unread(detail) || (marked !== null && detail.lastReplyAt! <= marked)) return;
-			marked = detail.lastReplyAt;
-			markSeen(nexus, thread, this.closed).catch((err: unknown) => {
-				if (this.closed.aborted || markFailed) return;
-				markFailed = true;
-				this.warn(`pi-nexus could not mark ${thread}'s reply seen, so it still shows as new in every client: ${message(err)}`);
-			});
+		const markRead = async (reply: number) => {
+			if (markFailed || marking || Date.now() < markAfter || (marked !== null && reply <= marked)) return;
+			marking = true;
+			marked = reply;
+			try {
+				const now = await showThread(nexus, thread, this.closed);
+				if (now.lastReplyAt === reply && unread(now)) await markSeen(nexus, thread, this.closed);
+			} catch (err) {
+				if (this.closed.aborted) return;
+				// A failure an outage explains marks the reply on a later showing.
+				if (!(err instanceof NexusError && err.kind === "invalid")) {
+					marked = null;
+					markAfter = Date.now() + detailEveryMs;
+				} else if (!markFailed) {
+					markFailed = true;
+					this.warn(`pi-nexus could not mark ${thread}'s reply seen, so it still shows as new in every client: ${message(err)}`);
+				}
+			} finally {
+				marking = false;
+			}
 		};
 		/**
 		 * A Claude worker's transcript, which the watch never streams, read one read at a time: at once, every
-		 * `claudeEveryMs` while its turn runs, and otherwise only when the details or a send say something changed, since
-		 * each read makes the control plane read the pylon. A failure says so once, and a CLI too old to read it ends the
-		 * reading.
+		 * `claudeEveryMs` while its turn runs, and otherwise only when the details, a send or r say something changed, since
+		 * each read makes the control plane read the pylon. A failed read is tried again, waiting twice as long each time up
+		 * to `claudeRetryMaxMs`, and says so once; a CLI too old to read it stops the reading until r. Nothing is read
+		 * while this terminal is attached to the pylon.
 		 */
 		let claudeRead: { again: boolean } | undefined;
 		let claudeTimer: ReturnType<typeof setTimeout> | undefined;
-		let claudeFailed = false;
+		let claudeFailures = 0;
 		let claudeStopped = false;
+		let attaching = false;
 		let claudeSeen: string | undefined;
 		const readClaude = async (): Promise<void> => {
-			if (claudeStopped || signal.aborted) return;
+			if (claudeStopped || attaching || signal.aborted || latest?.claudeWorker === undefined) return;
 			if (claudeRead !== undefined) return void (claudeRead.again = true);
 			const read = (claudeRead = { again: false });
 			clearTimeout(claudeTimer);
+			// The reply the details knew before the read, which the transcript read after it holds.
+			const replyAt = latest.lastReplyAt;
 			try {
 				const conversation = await readConversation(nexus, thread, signal);
 				if (signal.aborted) return;
-				screen.setConversation(conversation);
+				claudeFailures = 0;
+				screen.setConversation(conversation, replyAt);
 				if (conversation.working) claudeTimer = setTimeout(() => void readClaude(), claudeEveryMs);
 			} catch (err) {
 				if (signal.aborted) return;
-				if (!claudeFailed) screen.say(`Claude's transcript could not be read: ${message(err)}`, true);
-				claudeFailed = true;
+				if (claudeFailures === 0) screen.say(`Claude's transcript could not be read: ${message(err)}`, true);
 				if (err instanceof NexusError && err.kind === "invalid") claudeStopped = true;
+				else claudeTimer = setTimeout(() => void readClaude(), Math.min(claudeEveryMs * 2 ** claudeFailures, claudeRetryMaxMs));
+				claudeFailures++;
 			} finally {
 				claudeRead = undefined;
 				if (read.again) void readClaude();
@@ -455,8 +481,8 @@ export class Console {
 			try {
 				const detail = await showThread(nexus, thread, signal);
 				if (!signal.aborted && current()) {
+					latest = detail;
 					screen.setDetail(detail, askedAt);
-					markRead(detail);
 					claudeChanged(detail);
 				}
 			} catch (err) {
@@ -502,8 +528,23 @@ export class Console {
 				unpublish: (port) => unpreviewPort(nexus, thread, port, signal),
 				openSession: (harness, title) => openSession(nexus, thread, { harness, ...(title === undefined ? {} : { title }) }, signal),
 				closeSession: (id) => closeSession(nexus, thread, id, signal),
-				attach: () => attached(nexus, tui, thread),
-				refresh: () => void refreshDetail(),
+				async attach() {
+					attaching = true;
+					clearTimeout(claudeTimer);
+					try {
+						await attached(nexus, tui, thread);
+					} finally {
+						attaching = false;
+						void readClaude();
+					}
+				},
+				refresh() {
+					void refreshDetail();
+					claudeStopped = false;
+					claudeFailures = 0;
+					void readClaude();
+				},
+				shown: (reply) => void markRead(reply),
 				rewatch: () => watch(),
 				copy: (text) => copyToClipboard(text),
 			},

@@ -82,6 +82,11 @@ export interface ScreenActions {
 	closeSession(id: string): Promise<void>;
 	/** Gives the terminal to `nexus attach` until the person detaches from Herdr, then takes it back. */
 	attach(): Promise<void>;
+	/**
+	 * The Conversation view shows the reply that ended at `reply`, the details' `lastReplyAt`, so it may be marked seen.
+	 * Asked again on each draw that still shows it.
+	 */
+	shown(reply: number): void;
 	/** Reads the details again, which come back through setDetail. */
 	refresh(): void;
 	/** Follows the thread again after its watch ended, which then reports through watchEnded again. */
@@ -331,8 +336,9 @@ export class ThreadScreen implements Component, Focusable {
 	private readonly menuReader = new KeyReader(menuKeys);
 	private view: ThreadView = { entries: [] };
 	private detail: ThreadDetail | undefined;
-	/** A Claude worker's transcript as last read, which the watch never streams. */
+	/** A Claude worker's transcript as last read, which the watch never streams, and the reply it holds. */
 	private claude: ClaudeConversation | undefined;
+	private claudeReply: number | null = null;
 	/** The last mark handed out, and the one the shown details were asked for at. */
 	private marks = 0;
 	private askedAt = 0;
@@ -440,8 +446,10 @@ export class ThreadScreen implements Component, Focusable {
 		return this.detail?.claudeWorker !== undefined;
 	}
 
-	setConversation(conversation: ClaudeConversation): void {
+	/** `reply` is the details' `lastReplyAt` from before the read, which the transcript holds. */
+	setConversation(conversation: ClaudeConversation, reply: number | null): void {
 		this.claude = conversation;
+		this.claudeReply = reply;
 		this.checkoutFacts();
 		this.rebuild();
 	}
@@ -471,6 +479,7 @@ export class ThreadScreen implements Component, Focusable {
 		this.askedAt = askedAt;
 		settleSessions(this.sessionChanges, detail.sessions, this.now());
 		this.updateStatus();
+		this.tellShown();
 		this.tui.requestRender();
 	}
 
@@ -494,7 +503,26 @@ export class ThreadScreen implements Component, Focusable {
 		this.transcript.piTools = !this.isClaude;
 		this.body = this.transcript.build(blocks(this.items()));
 		this.updateStatus();
+		this.tellShown();
 		this.tui.requestRender();
+	}
+
+	/**
+	 * The reply the Conversation view shows, or null when it shows none for sure: another view is open, the watch is
+	 * not current, or a turn runs. A Claude worker's is the one its last read transcript holds. A Nexus agent's is the
+	 * details' once the watch has its run idle, since the watch prints an answer's entries before the state that ends
+	 * its turn.
+	 */
+	private shownReply(): number | null {
+		if (this.tab !== "conversation" || this.unwatched || this.view.outage) return null;
+		if (this.isClaude) return this.claude?.working === false ? this.claudeReply : null;
+		const state = this.view.state;
+		return state !== undefined && state.run !== "working" ? (this.detail?.lastReplyAt ?? null) : null;
+	}
+
+	private tellShown(): void {
+		const reply = this.shownReply();
+		if (reply !== null) this.options.actions.shown(reply);
 	}
 
 	private composer(): Composer {
@@ -1019,6 +1047,7 @@ export class ThreadScreen implements Component, Focusable {
 	private show(tab: Tab): void {
 		this.tab = tab;
 		if (tab === "changes") this.checkout.show();
+		this.tellShown();
 		this.tui.requestRender();
 	}
 
