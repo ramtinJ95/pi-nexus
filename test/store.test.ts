@@ -42,12 +42,14 @@ describe("the looks store", () => {
 });
 
 describe("the settings store", () => {
-	test("keeps the uncommitted base between sessions and alongside other choices", () => {
+	test("keeps the Changes base between sessions and alongside other choices", () => {
 		const at = file();
-		expect(settingsFile(at).read().uncommitted ?? false).toBe(false);
-		settingsFile(at).update({ uncommitted: true });
+		expect(settingsFile(at).read().base ?? "start").toBe("start");
+		settingsFile(at).update({ base: "turn" });
 		settingsFile(at).update({ project: "nexus", strip: false });
-		expect(settingsFile(at).read()).toEqual({ strip: false, project: "nexus", uncommitted: true });
+		expect(settingsFile(at).read()).toEqual({ strip: false, project: "nexus", base: "turn" });
+		writeFileSync(at, JSON.stringify({ strip: false, base: "yesterday" }));
+		expect(settingsFile(at).read()).toEqual({ strip: true, project: null });
 	});
 	test("shows the strip and every project until changed, and later sessions read the settings", () => {
 		const at = file();

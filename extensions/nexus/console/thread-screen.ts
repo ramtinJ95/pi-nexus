@@ -23,7 +23,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { Action } from "../commands.ts";
-import type { NodeSummary, OpenedSession, Preview, Session, ThreadDetail } from "../contract.ts";
+import type { Base, NodeSummary, OpenedSession, Preview, Session, ThreadDetail } from "../contract.ts";
 import { portBusy, type ThreadView } from "../thread.ts";
 import { detailLines, portLines, sessionLines } from "./inspector.ts";
 import { Checkout, changesLines, type CheckoutActions } from "./changes.ts";
@@ -157,6 +157,7 @@ type Command =
 	| "actions"
 	| "refresh"
 	| "uncommitted"
+	| "turn"
 	| "threads"
 	| "projects"
 	| "help"
@@ -193,6 +194,7 @@ const threadKeys: readonly Binding<Command>[] = [
 	{ keys: ["m", ":"], command: "actions", help: "the thread's actions: abort, retry, archive, delete and more" },
 	{ keys: ["r"], command: "refresh", help: "read Changes again (waking if needed), or the thread's details in other views" },
 	{ keys: ["c"], command: "uncommitted", help: "in Changes, toggle only uncommitted changes" },
+	{ keys: ["T"], command: "turn", help: "in Changes, toggle the latest turn's changes" },
 	{ keys: ["t"], command: "threads", help: "the thread picker, to switch threads" },
 	{ keys: ["p"], command: "projects", help: "the project picker, to choose the project whose threads show" },
 	{ keys: ["s", "?"], command: "help", help: "this help" },
@@ -308,7 +310,7 @@ export interface ScreenOptions {
 	/** The CLI binary the attach command shown and copied names. */
 	cli: string;
 	actions: ScreenActions;
-	checkout: { actions: CheckoutActions; uncommitted: boolean };
+	checkout: { actions: CheckoutActions; base: Base["kind"] };
 	done(end: ScreenEnd): void;
 	/** What the composer held when the thread was last left. */
 	draft?: Draft;
@@ -364,7 +366,7 @@ export class ThreadScreen implements Component, Focusable {
 
 	constructor(private readonly options: ScreenOptions) {
 		this.tui = options.tui;
-		this.checkout = new Checkout(options.checkout.actions, options.checkout.uncommitted, () => this.tui.requestRender());
+		this.checkout = new Checkout(options.checkout.actions, options.checkout.base, () => this.tui.requestRender());
 		this.theme = options.theme;
 		this.now = options.now ?? Date.now;
 		this.transcript = new Transcript(options.tui, options.theme, options.display);
@@ -435,7 +437,7 @@ export class ThreadScreen implements Component, Focusable {
 		const statuses = [s?.status, d?.thread.status];
 		const status = statuses.includes("deleted") ? "deleted" : statuses.includes("archived") ? "archived" : s?.status ?? d?.thread.status ?? "unknown";
 		this.checkout.update({ status, pylon: pylons.find((p) => p !== "running") ?? pylons[0] ?? "unknown",
-			working: s ? s.run === "working" : d?.thread.agentTurnRunning ?? false, agentAt: d?.thread.lastAgentActivityAt ?? 0 });
+			working: s ? s.run === "working" : d?.thread.agentTurnRunning ?? false, agentAt: Math.max(d?.thread.lastAgentActivityAt ?? 0, d?.lastReplyAt ?? 0) });
 	}
 
 	/**
@@ -955,7 +957,10 @@ export class ThreadScreen implements Component, Focusable {
 				this.options.actions.refresh();
 				return this.say("Reading the thread's details again...");
 			case "uncommitted":
-				if (this.tab === "changes") this.checkout.toggle();
+				if (this.tab === "changes") this.checkout.toggle("head");
+				return;
+			case "turn":
+				if (this.tab === "changes") this.checkout.toggle("turn");
 				return;
 			case "copy":
 				return this.copySelected();
@@ -1146,7 +1151,7 @@ export class ThreadScreen implements Component, Focusable {
 		else if (this.mode === "insert") keys = [rawKeyHint("esc", "normal mode"), rawKeyHint("enter", "send"), rawKeyHint("/", "commands"), rawKeyHint("pgup/pgdn", "scroll"), expand];
 		else if (this.tab === "changes") keys = [rawKeyHint("j/k", this.checkout.file ? "scroll" : "select"),
 			...(this.checkout.note() ? this.checkout.canWake ? [rawKeyHint("enter/o", "wake and read")] : [] : this.checkout.file ? [rawKeyHint("d/u", "half page")] : [rawKeyHint("enter/o", "open/fold")]),
-			rawKeyHint("c", this.checkout.uncommitted ? "only uncommitted: on" : "only uncommitted: off"), rawKeyHint("r", "read"), rawKeyHint("y", "copy path"), rawKeyHint("h/esc", this.checkout.file ? "tree" : "back"), k("help", "keys")];
+			rawKeyHint("c", `only uncommitted: ${this.checkout.base === "head" ? "on" : "off"}`), rawKeyHint("T", `latest turn: ${this.checkout.base === "turn" ? "on" : "off"}`), rawKeyHint("r", "read"), rawKeyHint("y", "copy path"), rawKeyHint("h/esc", this.checkout.file ? "tree" : "back"), k("help", "keys")];
 		else {
 			const move =
 				this.tab === "previews"

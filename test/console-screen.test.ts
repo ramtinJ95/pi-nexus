@@ -68,8 +68,8 @@ function open(
 		display: display(),
 		thread: idA,
 		cli,
-		checkout: { uncommitted: false, actions: {
-			changes: async (head) => ({ base: { kind: head ? "head" : "start", commit: null }, files: [], truncated: false }),
+		checkout: { base: "start", actions: {
+			changes: async (base) => ({ base: { kind: base, commit: null }, files: [], truncated: false }),
 			diff: async () => ({ base: { kind: "start", commit: null }, diff: "", truncated: false }),
 			persist() {},
 		} },

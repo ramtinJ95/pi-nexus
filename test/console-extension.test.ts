@@ -120,7 +120,12 @@ describe("console", () => {
 		n.press("\x1b"); expect(n.text()).toContain("→   R new.ts");
 		n.press("c");
 		await n.until(() => n.calls().some((c) => c[0] === "changes" && c.includes("--uncommitted")), "HEAD changes");
-		expect(settings.read().uncommitted).toBe(true);
+		expect(settings.read().base).toBe("head");
+		expect(n.text()).toContain("c only uncommitted: on  T latest turn: off");
+		n.press("T");
+		await n.until(() => n.calls().some((c) => c[0] === "changes" && c.includes("--turn")), "the latest turn's changes");
+		expect(settings.read().base).toBe("turn");
+		expect(n.text()).toContain("c only uncommitted: off  T latest turn: on");
 		n.press("3"); expect(n.text()).toContain("https://firebat.example.ts.net");
 		n.press("4"); expect(n.text()).toContain("Desired"); expect(n.text()).toContain("Sessions 1");
 		n.press("\t"); expect(n.text()).toContain("I'll read the probe first.");
@@ -130,7 +135,7 @@ describe("console", () => {
 		await n.until(() => n.shown.length === 2 && n.text().includes("nexus / Fix"), "the reopened thread");
 		n.press("2");
 		await n.until(() => n.text().includes("R new.ts"), "the persisted base");
-		expect(n.calls().filter((c) => c[0] === "changes").at(-1)).toContain("--uncommitted");
+		expect(n.calls().filter((c) => c[0] === "changes").at(-1)).toEqual(["changes", "--json", "--turn", "--", idA]);
 		n.press("q"); await later;
 	});
 
