@@ -5,7 +5,7 @@ import { getMarkdownTheme, type KeybindingsManager as Keybindings, type Theme } 
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Display } from "../extensions/nexus/console/transcript.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
-import type { Settings, SettingsStore, Viewed } from "../extensions/nexus/store.ts";
+import type { Settings, SettingsStore } from "../extensions/nexus/store.ts";
 import type { AssistantMessage, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { idA, thread } from "./fixtures.ts";
 
@@ -113,23 +113,6 @@ export const plain = (lines: readonly string[]) =>
 		.map((l) => l.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "").replace(/\x1b_[^\x07]*\x07/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd())
 		.join("\n");
 
-/** Looks kept in memory, so a test never touches the user's own. Every thread counts as looked at from `since`. */
-export function memoryViewed(since = 0): Viewed & { looks: [string, number][] } {
-	const threads: Record<string, number> = {};
-	const looks: [string, number][] = [];
-	return {
-		looks,
-		read: () => ({ since, threads: { ...threads } }),
-		mark(thread, at) {
-			looks.push([thread, at]);
-			threads[thread] = Math.max(threads[thread] ?? 0, at);
-		},
-		prune(kept, listedAt) {
-			for (const [thread, at] of Object.entries(threads)) if (!kept.has(thread) && at < listedAt) delete threads[thread];
-		},
-	};
-}
-
 /** Settings kept in memory, with each change recorded. */
 export function memorySettings(settings: Partial<Settings> = {}): SettingsStore & { writes: Partial<Settings>[] } {
 	let kept: Settings = { strip: true, project: null, ...settings };
@@ -148,4 +131,4 @@ export function memorySettings(settings: Partial<Settings> = {}): SettingsStore 
 export const memoryScope = (settings: Partial<Settings> = {}) => new Scope(memorySettings(settings), () => {}, () => {});
 
 /** The extension's stores, in memory. */
-export const memoryStores = (viewed = memoryViewed(), settings = memorySettings()) => ({ viewed, settings });
+export const memoryStores = (settings = memorySettings()) => ({ settings });

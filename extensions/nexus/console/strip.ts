@@ -1,7 +1,8 @@
 /**
- * The strip above pi's editor: the threads that need you, then those with news since you last looked, then those
- * whose agent works, with how long ago the message it answers came. It shows from the session's start, and
- * `/nexus strip off` hides it. Scoped to one project, it names the project first.
+ * The strip above pi's editor: the threads that need you, then those with a reply nobody has marked seen in any
+ * client, then those whose agent works, with how long ago the message it answers came, as the control plane's
+ * attention says. It shows from the session's start, and `/nexus strip off` hides it. Scoped to one project, it names
+ * the project first.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";

@@ -28,7 +28,7 @@ export function row(id: string, extra: Partial<ThreadRow> = {}): ThreadRow {
 	return { ...thread(id), seenAt: null, lastReplyAt: null, attention: null, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
 }
 
-export const threads = [row(idA, { agentTurnRunning: true }), row(idB), row(idC, { status: "archived" })];
+export const threads = [row(idA, { agentTurnRunning: true, attention: "working" }), row(idB), row(idC, { status: "archived" })];
 
 export const head: RenderedEntry = { entry: { id: 0 }, text: "" };
 export const user = (id: number, text: string): RenderedEntry => ({ entry: { id, model: [{ role: "user", content: text, timestamp: 0 }] }, text: `> ${text}` });

@@ -1,7 +1,8 @@
 /**
  * The thread picker, in pi's selector look: threads grouped by project, open ones first, the archived and deleted
- * ones folded, with the dashboard's overview columns. It shows the project chosen with p, or every project. A thread whose pylon failed says it needs you, and one whose
- * agent did something since you last looked says it is new.
+ * ones folded, with the dashboard's overview columns. It shows the project chosen with p, or every project. Its markers
+ * are the control plane's attention, which every client shares: a thread whose pylon failed, whose tasks are parked or
+ * whose session waits for input says it needs you, and one with a reply nobody has marked seen says it is new.
  *
  * Its keys are vim's, as the thread view's are: j and k move, / filters as pi's session picker does when you type,
  * and Enter accepts the filter.
@@ -10,9 +11,9 @@ import { DynamicBorder, rawKeyHint, type Theme } from "@earendil-works/pi-coding
 import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Project, ThreadRow } from "../contract.ts";
 import { inScope, scopeLabel } from "../scope.ts";
-import { lastActivityAt } from "../thread.ts";
+import { isWorking, lastActivityAt } from "../thread.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
-import { ago, attention, badge, groups, pickerRows, span, threadState, toneColor, type Group, type Marks, type PickerRow, type Tone } from "./model.ts";
+import { ago, badge, groups, markOf, pickerRows, span, threadState, toneColor, type Group, type PickerRow, type Tone } from "./model.ts";
 
 /** `back` returns to where the picker was opened from; `projects` chooses the project shown; `close` leaves the console. */
 export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "projects" } | { kind: "back" } | { kind: "close" };
@@ -44,7 +45,6 @@ export class Picker implements Component, Focusable {
 	private readonly search = new Input();
 	private readonly keys = new KeyReader(pickerKeys);
 	private groups: Group[] = [];
-	private marks: Marks = { seen: { since: 0, threads: {} }, parked: new Map() };
 	private readonly unfolded = new Set<string>();
 	private rows: PickerRow[] = [];
 	private selected = 0;
@@ -77,14 +77,13 @@ export class Picker implements Component, Focusable {
 	}
 
 	/** The threads, and the projects, of which only `scope`'s show unless it is null. */
-	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], marks: Marks, scope: string | null): void {
+	setThreads(threads: readonly ThreadRow[], projects: readonly Project[], scope: string | null): void {
 		const current = this.rows[this.selected];
 		const keep = this.at ?? (current?.kind === "thread" ? current.thread.id : undefined);
 		this.at = undefined;
 		this.scope = scope;
 		this.projects = projects;
 		this.groups = groups(inScope(threads, scope), scope === null ? projects : projects.filter((p) => p.id === scope));
-		this.marks = marks;
 		this.error = undefined;
 		this.layout();
 		// The same thread stays selected across a refresh.
@@ -208,19 +207,19 @@ export class Picker implements Component, Focusable {
 
 	/** A thread's overview columns, fullest first: state, wanted, observed, node, human, agent, last active. */
 	private cells(th: ThreadRow): { level: string[][]; tone: Tone } {
-		const [label, tone] = threadState(th, th.pylon.actualState);
+		const [label, tone] = threadState(th, th.pylon.actualState, isWorking(th));
 		const desired = `wanted ${th.desired}`;
 		const pylon = [badge(th.pylon.actualState)[0], th.pylon.node];
 		const human = `human ${ago(th.lastHumanActivityAt, this.now())}`;
-		const agent = `agent ${th.agentTurnRunning ? "turn running" : ago(th.lastAgentActivityAt, this.now())}`;
+		const agent = `agent ${isWorking(th) ? "turn running" : ago(th.lastAgentActivityAt, this.now())}`;
 		const at = span(lastActivityAt(th), this.now()) ?? "now";
 		return { tone, level: [[label, desired, ...pylon, human, agent, at], [label, desired, ...pylon, at], [label, at]] };
 	}
 
 	/** What a thread wants of the person, after its title. */
 	private marker(th: ThreadRow): string {
-		const a = attention(th, this.marks);
-		return a === "needs-you" ? ` ${this.theme.fg("warning", "needs you")}` : a === "new" ? ` ${this.theme.fg("accent", "new")}` : "";
+		const mark = markOf(th);
+		return mark === "needs-you" ? ` ${this.theme.fg("warning", "needs you")}` : mark === "new" ? ` ${this.theme.fg("accent", "new")}` : "";
 	}
 
 	/**

@@ -15,6 +15,7 @@ import {
 	listNodes,
 	listProjects,
 	listThreads,
+	markSeen,
 	openSession,
 	previewPort,
 	readChanges,
@@ -26,11 +27,11 @@ import {
 	type Nexus,
 } from "../cli.ts";
 import type { Action } from "../commands.ts";
-import { emptyView, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
-import type { NodeSummary, ThreadRow } from "../contract.ts";
+import { emptyView, isWorking, lastActivityAt, NexusError, reduce, type ThreadView } from "../thread.ts";
+import type { NodeSummary, ThreadDetail, ThreadRow } from "../contract.ts";
 import { inScope, type Scope } from "../scope.ts";
-import type { SettingsStore, Viewed } from "../store.ts";
-import { attachCommand, isClosed, noteParked, startArgs, type Parked } from "./model.ts";
+import type { SettingsStore } from "../store.ts";
+import { attachCommand, isClosed, startArgs, unread } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { ProjectFormView } from "./project-form.ts";
 import { ProjectPicker, type ProjectEnd } from "./project-picker.ts";
@@ -142,7 +143,7 @@ type Place =
 
 /** The thread whose agent is working, the most recently active first, which `/nexus` opens on. */
 function workingThread(threads: readonly ThreadRow[]): string | undefined {
-	return threads.filter((t) => t.agentTurnRunning && !isClosed(t)).sort((a, b) => lastActivityAt(b) - lastActivityAt(a))[0]?.id;
+	return threads.filter((t) => isWorking(t) && !isClosed(t)).sort((a, b) => lastActivityAt(b) - lastActivityAt(a))[0]?.id;
 }
 
 export class Console {
@@ -152,12 +153,9 @@ export class Console {
 	constructor(
 		private readonly nexus: Nexus,
 		private readonly closed: AbortSignal,
-		private readonly viewed: Viewed,
-		/** The threads seen parked, which the open thread's watch keeps up to date. */
-		private readonly parked: Parked,
 		/** The project whose threads the picker shows, which the project picker changes. */
 		private readonly scope: Scope,
-		/** Says what went wrong outside a view, such as a look that could not be recorded. */
+		/** Says what went wrong outside a view, such as a reply that could not be marked seen. */
 		private readonly warn: (message: string) => void,
 		private readonly settings: SettingsStore,
 		private readonly display: (cwd: string) => Display = userDisplay,
@@ -275,12 +273,10 @@ export class Console {
 					break;
 				}
 				case "thread": {
-					this.look(place.id);
 					const shown = await this.custom<ScreenEnd>(ui, (tui, theme, keybindings, done) => this.screen(tui, theme, keybindings, done, cwd, place.id), {
 						overlay: true,
 						overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" },
 					});
-					this.look(place.id);
 					if (shown === undefined) return false;
 					const end = shown.result;
 					if (end.kind === "back") back();
@@ -343,15 +339,6 @@ export class Console {
 		return true;
 	}
 
-	/** Records that the person looked at `thread` now, which clears its new marker. */
-	private look(thread: string): void {
-		try {
-			this.viewed.mark(thread, Date.now());
-		} catch (err) {
-			this.warn(`pi-nexus could not record that you viewed ${thread}, so it may still show as new: ${message(err)}`);
-		}
-	}
-
 	private picker(tui: TUI, theme: Theme, done: (end: PickerEnd) => void, at: string | undefined) {
 		const stop = new AbortController();
 		const signal = AbortSignal.any([stop.signal, this.closed]);
@@ -367,7 +354,7 @@ export class Console {
 				]);
 				if (signal.aborted || !current()) return;
 				if (Array.isArray(projects)) this.scope.check(projects, asked);
-				picker.setThreads(threads, Array.isArray(projects) ? projects : [], { seen: this.viewed.read(), parked: this.parked }, this.scope.project);
+				picker.setThreads(threads, Array.isArray(projects) ? projects : [], this.scope.project);
 				if (!Array.isArray(projects)) picker.setError(`The projects could not be read, so only projects with threads show: ${message(projects)}`);
 			} catch (err) {
 				if (!signal.aborted && current()) picker.setError(`The threads could not be read: ${message(err)}`);
@@ -402,15 +389,33 @@ export class Console {
 		const stop = new AbortController();
 		const signal = AbortSignal.any([stop.signal, this.closed]);
 		const nexus = this.nexus;
-		const parked = this.parked;
 		let view: ThreadView = emptyView;
 		const begin = inOrder();
+		/** The latest reply a mark went out for, and whether a mark failed, which ends the marking for this view. */
+		let marked: number | null = null;
+		let markFailed = false;
+		/**
+		 * Marks the shown reply seen, for every client. The session's signal, not the view's, ends it, so leaving the
+		 * thread does not abort a mark under way.
+		 */
+		const markRead = (detail: ThreadDetail) => {
+			if (markFailed || !unread(detail) || (marked !== null && detail.lastReplyAt! <= marked)) return;
+			marked = detail.lastReplyAt;
+			markSeen(nexus, thread, this.closed).catch((err: unknown) => {
+				if (this.closed.aborted || markFailed) return;
+				markFailed = true;
+				this.warn(`pi-nexus could not mark ${thread}'s reply seen, so it still shows as new in every client: ${message(err)}`);
+			});
+		};
 		const refreshDetail = async () => {
 			const current = begin();
 			const askedAt = screen.mark();
 			try {
 				const detail = await showThread(nexus, thread, signal);
-				if (!signal.aborted && current()) screen.setDetail(detail, askedAt);
+				if (!signal.aborted && current()) {
+					screen.setDetail(detail, askedAt);
+					markRead(detail);
+				}
 			} catch (err) {
 				// The watch reports an outage itself.
 				if (!signal.aborted && current() && !(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) {
@@ -468,7 +473,6 @@ export class Console {
 						view = reduce(view, event);
 						redraw.request();
 						if (event.type !== "state") return;
-						noteParked(parked, thread, view.state, Date.now());
 						// A changed state can change what only the detail holds, such as the pylon's node, its previews or a
 						// retry refusal.
 						const key = JSON.stringify(view.state);

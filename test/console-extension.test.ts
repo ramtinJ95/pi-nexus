@@ -6,7 +6,7 @@ import { addProject, createNexus, listProjects, listThreads, openSession, showTh
 import { shellQuote } from "../extensions/nexus/console/model.ts";
 import nexusExtension from "../extensions/nexus/index.ts";
 import type { SettingsStore } from "../extensions/nexus/store.ts";
-import { detail, display, entries, fakeTui, keybindings, live, memorySettings, memoryViewed, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { detail, display, entries, fakeTui, keybindings, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
 import { fakeNexus, idA, idB, idC, reset, row, state, threads, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
@@ -31,7 +31,7 @@ interface Shown {
 }
 
 /** `custom` false stands in for a pi without custom UI, such as RPC mode, whose custom() never calls the factory. */
-function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = memorySettings() as SettingsStore } = {}) {
+function load(s: Scenario, { custom = true, settings = memorySettings() as SettingsStore } = {}) {
 	const fake = fakeNexus(s);
 	const notes: { title: string; body: string }[] = [];
 	const notified: [string, string | undefined][] = [];
@@ -70,7 +70,7 @@ function load(s: Scenario, { custom = true, viewed = memoryViewed(), settings = 
 					: Promise.resolve(undefined),
 		},
 	} as unknown as ExtensionCommandContext;
-	nexusExtension(pi, createNexus(fake.bin), display, { viewed, settings });
+	nexusExtension(pi, createNexus(fake.bin), display, { settings });
 	cleanups.push(() => handlers.get("session_shutdown")?.(), fake.cleanup);
 	const until = async (check: () => boolean, what: string) => {
 		for (let i = 0; i < 150 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -398,7 +398,7 @@ describe("console", () => {
 	});
 
 	test("with no agent working, /nexus opens the picker; t switches threads, and h returns to the thread you came from", async () => {
-		const idle = threads.map((t) => ({ ...t, agentTurnRunning: false }));
+		const idle = threads.map((t) => ({ ...t, agentTurnRunning: false, attention: null }));
 		const n = load({ ...scenario, responses: { ...scenario.responses, threads: idle } });
 		const done = n.run("");
 		await n.until(() => n.shown.length === 1 && n.text().includes(threads[1]!.title), "the picker");
@@ -416,24 +416,56 @@ describe("console", () => {
 		await done;
 	});
 
-	test("the status line counts working threads, those that need you and new answers, and a look clears new", async () => {
-		const list = [threads[0], row(idB, { lastAgentActivityAt: 1_000 }), row(idC, { pylon: { node: "firebat", actualState: "failed", failed: "boom" } })];
-		const viewed = memoryViewed(0);
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed });
+	test("the status line counts working threads, those that need you and new replies, and opening an unread thread marks it seen once", async () => {
+		const claude = row("th-c1a0de000000", { attention: "working" });
+		const list = [threads[0], row(idB, { attention: "reply", lastReplyAt: 2_000 }), row(idC, { attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "boom" } }), claude];
+		const seen = [threads[0], row(idB, { seenAt: 2_000, lastReplyAt: 2_000 }), list[2], claude];
+		const unread = { ...detail, lastReplyAt: 2_000, attention: "reply" };
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list, show: unread, seen: null }, after: { seen: { threads: seen } } });
 		await n.run("list");
-		await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 needs you · 1 new", "the summary");
+		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you · 1 new", "the summary");
 		const done = n.run(`open ${idB}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes(`(${idB})`), "the thread");
-		n.press("q");
+		await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+		n.normal("r");
+		await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
+		n.normal("q");
 		await done;
-		expect(viewed.looks.map(([thread]) => thread)).toEqual([idB, idB]);
-		await n.until(() => n.statuses.at(-1) === "nexus 1 working · 1 needs you", "the summary without new");
+		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you", "the summary without new");
+		expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--", idB]]);
+	});
+
+	test("a thread whose reply was seen, here or in another client, is not marked again", async () => {
+		const n = load({ ...scenario, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
+		n.normal("q");
+		await done;
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+	});
+
+	test("a CLI older than 0.10.0 cannot mark a reply seen, which one warning says", async () => {
+		const n = load({ ...scenario, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.notified.some(([, level]) => level === "warning"), "the warning");
+		n.normal("r");
+		await n.until(() => n.calls().filter((c) => c[0] === "show").length >= 2, "the details again");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		n.normal("q");
+		await done;
+		expect(n.notified.filter(([, level]) => level === "warning")).toEqual([
+			[`pi-nexus could not mark ${idA}'s reply seen, so it still shows as new in every client: ${n.bin} is 0.9.0: marking a reply seen needs Nexus CLI 0.10.0 or later (nexus --version)`, "warning"],
+		]);
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
 	});
 
 	test("the strip above the editor lists the threads that need you, have news or work, and /nexus strip off hides it for later sessions too", async () => {
-		const list = [{ ...threads[0]!, title: "Fix the probe retry", lastHumanActivityAt: Date.now() - 180_000 }, row(idB, { title: "Answered", lastAgentActivityAt: 1_000 }), row(idC, { title: "Broken", pylon: { node: "firebat", actualState: "failed", failed: "boom" } })];
+		const list = [
+			{ ...threads[0]!, title: "Fix the probe retry", attention: "working", lastHumanActivityAt: Date.now() - 180_000 },
+			row(idB, { title: "Answered", attention: "reply", lastReplyAt: 1_000 }),
+			row(idC, { title: "Broken", attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "boom" } }),
+		];
 		const settings = memorySettings();
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed: memoryViewed(0), settings });
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { settings });
 		await n.run("list");
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
@@ -447,7 +479,7 @@ describe("console", () => {
 		expect(n.statuses.at(-1)).toBeUndefined();
 		expect(settings.writes).toEqual([{ strip: false }]);
 		// A later session reads the setting, so it starts without polling, and a command does not bring either back.
-		const later = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { viewed: memoryViewed(0), settings });
+		const later = load({ ...scenario, responses: { ...scenario.responses, threads: list } }, { settings });
 		later.start();
 		await later.run("list");
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -458,16 +490,6 @@ describe("console", () => {
 		expect(later.widgets.at(-1)?.[1]).toBeDefined();
 		expect(later.statuses.at(-1)).toBe("nexus 1 working · 1 needs you · 1 new");
 		expect(settings.writes).toEqual([{ strip: false }, { strip: true }]);
-	});
-
-	test("each poll drops the looks at threads the list no longer has", async () => {
-		const viewed = memoryViewed(0);
-		viewed.mark(idA, 1_000);
-		viewed.mark("th-00000000dead", 1_000);
-		const n = load(scenario, { viewed });
-		n.start();
-		await n.until(() => n.statuses.at(-1) !== undefined, "the summary");
-		expect(viewed.read().threads).toEqual({ [idA]: 1_000 });
 	});
 
 	test("with the strip on, the summary and strip show from the session's start, before any /nexus", async () => {
@@ -482,18 +504,13 @@ describe("console", () => {
 		expect(off.calls()).toEqual([]);
 	});
 
-	test("the open thread's parked tasks need you, in the status line and the strip", async () => {
-		const parked = { ...working, run: "parked" as const, parkedTasks: 2 };
-		const list = [row(idA, { title: "Parked one", lastAgentActivityAt: 1_000 })];
-		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list }, watch: [{ event: reset(idA, entries) }, { event: state(idA, parked) }] }, { viewed: memoryViewed(Date.now() + 60_000) });
+	test("parked tasks need you, in the status line and the strip, whether any client watched the thread or not", async () => {
+		const list = [row(idA, { title: "Parked one", attention: "parked" })];
+		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } });
 		await n.run("list");
-		await n.until(() => n.statuses.at(-1) === "nexus 0 working", "the summary");
-		const done = n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 tasks hit the restart limit"), "the parked thread");
-		n.normal("q");
-		await done;
 		await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 needs you", "needs you");
 		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus ● Parked one needs you");
+		expect(n.calls().some((c) => c[0] === "watch")).toBe(false);
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
@@ -581,16 +598,16 @@ describe("console", () => {
 	});
 
 	describe("projects", () => {
-		const spoonThread = row("th-5b00a0000001", { project: "spoon", title: "Spoon work", lastAgentActivityAt: 1_000 });
+		const spoonThread = row("th-5b00a0000001", { project: "spoon", title: "Spoon work", attention: "reply", lastReplyAt: 1_000 });
 		const both = [...projects, { id: "spoon", repoUrl: "git@example.com:spoon", defaultNode: "firebat", defaultBranch: "main" }];
-		const idleThreads = [...threads.map((t) => ({ ...t, agentTurnRunning: false })), spoonThread];
+		const idleThreads = [...threads.map((t) => ({ ...t, agentTurnRunning: false, attention: null })), spoonThread];
 		const scoped: Scenario = { ...scenario, responses: { ...scenario.responses, projects: both, threads: [...threads, spoonThread] } };
 		const idleScenario: Scenario = { ...scoped, responses: { ...scoped.responses, threads: idleThreads } };
 		const addFails = (exit: number, kind: string, error: string): Scenario => ({ ...idleScenario, fail: { project: { exit, kind, error } } });
 
 		test("p in the picker chooses a project, whose threads alone then show in the picker, the status line and the strip, in later sessions too", async () => {
 			const settings = memorySettings();
-			const n = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			const n = load(idleScenario, { settings });
 			n.start();
 			await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 new", "the summary of every project");
 			const done = n.run("");
@@ -609,7 +626,7 @@ describe("console", () => {
 			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus spoon · ● Spoon work new reply");
 			n.press("q");
 			await done;
-			const later = load(idleScenario, { settings, viewed: memoryViewed(0) });
+			const later = load(idleScenario, { settings });
 			later.start();
 			await later.until(() => later.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "a later session's summary of spoon");
 		});
@@ -783,7 +800,7 @@ describe("console", () => {
 
 		describe("a scratch project", () => {
 			const sketch = { id: "sketch", repoUrl: null, defaultNode: "nuc", defaultBranch: "trunk" };
-			const sketchThread = row("th-5c00a0000001", { project: "sketch", title: "Sketch work", lastAgentActivityAt: 1_000 });
+			const sketchThread = row("th-5c00a0000001", { project: "sketch", title: "Sketch work", attention: "reply", lastReplyAt: 1_000 });
 			const withScratch: Scenario = { ...scenario, responses: { ...scenario.responses, projects: [...projects, sketch], threads: [...idleThreads.slice(0, 3), sketchThread] } };
 
 			test("shows as scratch in the project picker, and its start form says it starts an empty repository", async () => {
@@ -816,8 +833,8 @@ describe("console", () => {
 				n.start();
 				await n.run("project sketch");
 				expect(n.notified.at(-1)).toEqual(["Nexus shows the project sketch.", "info"]);
-				// The looks store starts at 0, so the idle scratch thread, with activity at 1_000, is new once the threads are
-				// listed. A summary drawn before the start's list lands counts no threads, so only the listed one is waited for.
+				// The idle scratch thread has a reply nobody has seen, so it is new once the threads are listed. A summary drawn
+				// before the start's list lands counts no threads, so only the listed one is waited for.
 				await n.until(() => n.statuses.at(-1) === "nexus sketch · 0 working · 1 new", "the summary of sketch");
 			});
 

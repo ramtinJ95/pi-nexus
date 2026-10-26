@@ -6,7 +6,6 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
 import { contentText, lastActivityAt, portBusy, workingCount } from "../thread.ts";
-import type { Seen } from "../store.ts";
 
 /** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
 export type Tone = "ok" | "work" | "busy" | "idle" | "bad" | "muted";
@@ -165,11 +164,11 @@ export function shownSessions(sessions: readonly Session[], changes: SessionChan
 
 /**
  * What a thread is doing, most urgent first: the agent mid-turn hides a running pylon, never a failed one. `actual`
- * is the pylon's observed state.
+ * is the pylon's observed state, and `working` whether its agent works, which a Claude worker's turn is too.
  */
-export function threadState(t: Thread, actual: string): [label: string, tone: Tone] {
+export function threadState(t: Thread, actual: string, working = t.agentTurnRunning): [label: string, tone: Tone] {
 	if (t.status === "archived" || t.status === "deleted") return [t.status, "muted"];
-	if (t.agentTurnRunning && actual !== "failed") return ["agent working", "work"];
+	if (working && actual !== "failed") return ["agent working", "work"];
 	return badge(actual);
 }
 
@@ -221,46 +220,28 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 	});
 }
 
-/**
- * The threads seen parked, with when, from the thread the console shows or a follow, since the threads list does not
- * say. The Claude Code Nexus mod knows parked tasks the same way, only for the thread it watches.
- */
-export type Parked = Map<string, number>;
-
-/** Records what `state` says of the thread's parked tasks, seen at `now`. */
-export function noteParked(parked: Parked, thread: string, state: ThreadState | undefined, now: number): void {
-	if (state?.run === "parked") parked.set(thread, now);
-	else if (state !== undefined) parked.delete(thread);
-}
-
-/** What the person has looked at, and the threads seen parked: what the markers read. */
-export interface Marks {
-	seen: Seen;
-	parked: ReadonlyMap<string, number>;
-}
+/** What a thread's marker says: it needs the person, it has a reply they have not seen, or its agent works. */
+export type Mark = "needs-you" | "new" | "working";
 
 /**
- * What a thread wants of the person, most urgent first: its pylon failed or its tasks are parked, and only they can
- * retry them, or its agent did something since they last looked. A working agent is not done yet, and an archived
- * or deleted thread wants nothing. A thread seen parked stays so until its agent does something after that.
+ * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, or answer a
+ * session waiting for input. An attention value this table does not know shows no marker.
  */
-export type Attention = "needs-you" | "new" | null;
+const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
 
-export function attention(t: ThreadRow, { seen, parked }: Marks): Attention {
-	if (isClosed(t)) return null;
-	if (t.pylon.failed !== null) return "needs-you";
-	if (t.agentTurnRunning) return null;
-	const parkedAt = parked.get(t.id);
-	if (parkedAt !== undefined && t.lastAgentActivityAt <= parkedAt) return "needs-you";
-	return t.lastAgentActivityAt > (seen.threads[t.id] ?? seen.since) ? "new" : null;
-}
+/** An archived or deleted thread wants nothing. */
+export const markOf = (t: ThreadRow): Mark | null =>
+	isClosed(t) || t.attention === null || !Object.hasOwn(marks, t.attention) ? null : marks[t.attention]!;
+
+/** Whether the latest reply came after anyone, in any client, last marked it seen. */
+export const unread = (t: Pick<ThreadRow, "seenAt" | "lastReplyAt">) => t.lastReplyAt !== null && (t.seenAt === null || t.lastReplyAt > t.seenAt);
 
 /**
  * The status line's summary of the threads in scope, such as `nexus 2 working · 1 needs you · 3 new`, or
  * `nexus spoon · 1 working` for one project. The counts other than working show when not zero.
  */
-export function summary(threads: readonly ThreadRow[], marks: Marks, project: string | null = null): string {
-	const count = (a: Attention) => threads.filter((t) => attention(t, marks) === a).length;
+export function summary(threads: readonly ThreadRow[], project: string | null = null): string {
+	const count = (mark: Mark) => threads.filter((t) => markOf(t) === mark).length;
 	const needs = count("needs-you");
 	const fresh = count("new");
 	return [
@@ -273,15 +254,15 @@ export function summary(threads: readonly ThreadRow[], marks: Marks, project: st
 /** A thread in the strip above pi's editor: one that needs you, has news, or works, in that order. */
 export interface Chip {
 	thread: ThreadRow;
-	kind: "needs-you" | "new" | "working";
+	kind: Mark;
 }
 
-const chipOrder: Readonly<Record<Chip["kind"], number>> = { "needs-you": 0, new: 1, working: 2 };
+const chipOrder: Readonly<Record<Mark, number>> = { "needs-you": 0, new: 1, working: 2 };
 
-export function chips(threads: readonly ThreadRow[], marks: Marks): Chip[] {
+export function chips(threads: readonly ThreadRow[]): Chip[] {
 	return threads
 		.flatMap((thread): Chip[] => {
-			const kind = attention(thread, marks) ?? (thread.agentTurnRunning && !isClosed(thread) ? "working" : null);
+			const kind = markOf(thread);
 			return kind === null ? [] : [{ thread, kind }];
 		})
 		.sort((a, b) => chipOrder[a.kind] - chipOrder[b.kind] || lastActivityAt(b.thread) - lastActivityAt(a.thread));

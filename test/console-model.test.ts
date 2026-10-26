@@ -8,6 +8,7 @@ import {
 	argumentsDiff,
 	attachCommand,
 	blocks,
+	chips,
 	clock,
 	composerOf,
 	conversationItems,
@@ -22,7 +23,9 @@ import {
 	startArgs,
 	startHint,
 	stepsSummary,
+	summary,
 	threadState,
+	unread,
 	workingMessage,
 	type Item,
 	type ToolItem,
@@ -37,12 +40,46 @@ import { idA, idB, idC, idle, row, thread } from "./fixtures.ts";
 const project = { id: "nexus", repoUrl: "git@example.com:nexus", defaultNode: "firebat", defaultBranch: "main" };
 const tools = (items: Item[]) => items.filter((i): i is ToolItem => i.kind === "tool");
 
+describe("markers", () => {
+	const failed = row(idA, { title: "Broken", attention: "failed", lastAgentActivityAt: 1 });
+	const reply = row(idB, { title: "Answered", attention: "reply", lastReplyAt: 5, lastAgentActivityAt: 5 });
+	const claude = row(idC, { title: "Claude at work", attention: "working", lastAgentActivityAt: 9 });
+	const waiting = row("th-0000000000aa", { title: "Waiting", attention: "waiting", lastAgentActivityAt: 3 });
+	const archived = row("th-0000000000bb", { title: "Archived", attention: "reply", status: "archived" });
+
+	test("the status line counts the control plane's attention, and a Claude worker's turn as working", () => {
+		expect(summary([failed, reply, claude, waiting, archived])).toBe("nexus 1 working · 2 needs you · 1 new");
+		expect(summary([row(idA, { agentTurnRunning: true })], "spoon")).toBe("nexus spoon · 1 working");
+	});
+
+	test("the strip lists what needs you, then new replies, then work, an unknown attention not at all", () => {
+		const unknown = row("th-0000000000cc", { attention: "stalled" });
+		expect(chips([claude, reply, archived, failed, unknown, waiting]).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Waiting", "needs-you"],
+			["Broken", "needs-you"],
+			["Answered", "new"],
+			["Claude at work", "working"],
+		]);
+	});
+
+	test("a reply is unread until someone marks it seen", () => {
+		expect(unread({ seenAt: null, lastReplyAt: null })).toBe(false);
+		expect(unread({ seenAt: null, lastReplyAt: 5 })).toBe(true);
+		expect(unread({ seenAt: 4, lastReplyAt: 5 })).toBe(true);
+		expect(unread({ seenAt: 5, lastReplyAt: 5 })).toBe(false);
+	});
+});
+
 describe("thread state", () => {
 	test("the agent mid-turn hides a running pylon, never a failed one", () => {
 		expect(threadState(thread(idA, { agentTurnRunning: true }), "running")).toEqual(["agent working", "work"]);
 		expect(threadState(thread(idA, { agentTurnRunning: true }), "failed")).toEqual(["failed", "bad"]);
 		expect(threadState(thread(idA, { status: "archived", agentTurnRunning: true }), "running")).toEqual(["archived", "muted"]);
 		expect(threadState(thread(idA), "absent")).toEqual(["not on its node", "muted"]);
+	});
+
+	test("a Claude worker's turn shows as working too", () => {
+		expect(threadState(thread(idA), "running", true)).toEqual(["agent working", "work"]);
 	});
 
 	test("times read as the dashboard's", () => {

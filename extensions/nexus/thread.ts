@@ -2,7 +2,7 @@
  * What pi-nexus makes of a Nexus thread, from the shapes in contract.ts. The settle rule, the trims and the thread
  * matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
  */
-import type { LiveRun, Part, RenderedEntry, Thread, ThreadState, WatchEvent } from "./contract.ts";
+import type { LiveRun, Part, RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
 
 /** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
 export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
@@ -157,8 +157,11 @@ export function threadRows(threads: readonly Thread[]): string {
 	return rows.map((r) => r.map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i]!))).join("  ")).join("\n");
 }
 
-export const workingCount = (threads: readonly Thread[]) =>
-	threads.filter((t) => t.agentTurnRunning && t.status !== "deleted").length;
+/** Whether the thread's agent works: a Nexus agent's turn, or, by the control plane's attention, a Claude worker's. */
+export const isWorking = (t: Pick<ThreadRow, "agentTurnRunning" | "attention">) => t.agentTurnRunning || t.attention === "working";
+
+export const workingCount = (threads: readonly ThreadRow[]) =>
+	threads.filter((t) => isWorking(t) && t.status !== "deleted").length;
 
 export const lastActivityAt = (t: Thread) => Math.max(t.lastAgentActivityAt, t.lastHumanActivityAt, t.createdAt);
 

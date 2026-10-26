@@ -4,8 +4,8 @@
  * - work/, a project for the real pi session, with src/probe.ts and test.sh;
  * - nexus, a fake nexus binary whose thread holds the same conversation, its tool results made by pi's own tools on
  *   a copy of work/, so both sides show the same output;
- * - agent/, a pi agent directory for the session, whose looks store dates from before the other threads answered,
- *   so the picker marks one as new and one, whose pylon failed, as needing you;
+ * - agent/, an empty pi agent directory for the session. The control plane's attention marks one thread as new and
+ *   one, whose pylon failed, as needing you;
  * - a line on stdout with the thread's ID.
  *
  * Two projects, demo and site, list beside two nodes, and `nexus project add` adds a third, which the projects list
@@ -203,6 +203,7 @@ const scenario = {
 		projects: [project("demo", "git@github.com:ramtinJ95/probe-demo.git", "firebat"), project("site", "git@github.com:ramtinJ95/site.git", "nuc")],
 		preview: own,
 		unpreview: null,
+		seen: null,
 	},
 	// The details list port 8080's preview once it opens, and stop listing it once it is unpublished.
 	after: { preview: { show: opened }, unpreview: { show: detail } },
@@ -216,8 +217,7 @@ const scenarioFile = path.join(dir, "scenario.json");
 const log = path.join(dir, "calls.log");
 const bin = path.join(dir, "nexus");
 writeFileSync(scenarioFile, JSON.stringify(scenario));
-mkdirSync(path.join(dir, "agent/pi-nexus"), { recursive: true });
-writeFileSync(path.join(dir, "agent/pi-nexus/viewed.json"), JSON.stringify({ since: asked - 1_800_000, threads: {} }));
+mkdirSync(path.join(dir, "agent"), { recursive: true });
 writeFileSync(log, "");
 const fake = path.join(import.meta.dir, "../fake-nexus.mjs");
 writeFileSync(bin, `#!/bin/sh\nFAKE_NEXUS=${JSON.stringify(scenarioFile)} FAKE_NEXUS_LOG=${JSON.stringify(log)} exec node ${JSON.stringify(fake)} "$@"\n`);
