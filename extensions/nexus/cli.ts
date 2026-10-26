@@ -4,9 +4,10 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Type } from "typebox";
 import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, type ThreadDetail, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
-import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
+import { claudeState, emptyView, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** The CLI binary this runs, which a command a person runs themselves names too. */
@@ -159,13 +160,19 @@ export async function listThreads(nexus: Nexus, args: readonly string[] = [], si
 	}
 }
 
-/** Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title or a message. */
+/**
+ * Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title, a message or
+ * a Claude prompt. `claude` starts a Claude Code worker with that first prompt, which needs CLI 0.15.0, and `model`
+ * picks its model, which needs CLI 0.16.0.
+ */
 export async function startThread(
 	nexus: Nexus,
-	start: { project: string; message?: string; title?: string; node?: string; branch?: string },
+	start: { project: string; message?: string; title?: string; node?: string; branch?: string; claude?: string; model?: string },
 	signal?: AbortSignal,
 ): Promise<Thread> {
-	const flags = (["message", "title", "node", "branch"] as const).flatMap((key) => (start[key] ? [`--${key}=${start[key]}`] : []));
+	if (start.model) await requireVersion(nexus, [0, 16, 0], "choosing a Claude Code worker's model", signal);
+	else if (start.claude) await requireVersion(nexus, [0, 15, 0], "starting a Claude Code worker", signal);
+	const flags = (["message", "claude", "model", "title", "node", "branch"] as const).flatMap((key) => (start[key] ? [`--${key}=${start[key]}`] : []));
 	return parse(Thread, await nexus.run(["start", `--project=${start.project}`, ...flags], signal), "nexus start");
 }
 
@@ -518,4 +525,66 @@ export async function waitThread(nexus: Nexus, thread: string, timeoutMs: number
 	// A watch that ended by itself ended on the thread's delete.
 	const settled = checked || (!cancelled && !timeout.aborted);
 	return { view, settled, timedOut: timeout.aborted && !settled, cancelled };
+}
+
+/** How often a wait reads a Claude worker thread, as the Claude Code Nexus mod does. */
+const claudeWaitMs = 2_000;
+
+export interface ClaudeThread {
+	detail: ThreadDetail;
+	conversation: ClaudeConversation;
+}
+
+/** A Claude worker thread's details and transcript, or undefined for a thread whose agent is Nexus's, which a watch reports. */
+export async function readClaudeThread(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<ClaudeThread | undefined> {
+	const detail = await showThread(nexus, thread, signal);
+	if (detail.claudeWorker === undefined) return undefined;
+	return { detail, conversation: await readConversation(nexus, thread, signal) };
+}
+
+export interface ClaudeWaited {
+	last: ClaudeThread;
+	settled: boolean;
+	timedOut: boolean;
+	cancelled: boolean;
+	/** Why the last reading failed, while it fails: the wait goes on with the reading before. */
+	outage?: string;
+}
+
+/**
+ * Reads a Claude worker thread every `claudeWaitMs` until it is idle, its launch fails, `timeoutMs` passes or `signal`
+ * aborts. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading settles only
+ * when the one before it was idle too, unless this wait saw the turn run; a deadline too near for that reading ends the
+ * wait unsettled. The rule is the Claude Code Nexus mod's.
+ */
+export async function waitClaude(nexus: Nexus, thread: string, first: ClaudeThread, timeoutMs: number, signal?: AbortSignal): Promise<ClaudeWaited> {
+	const until = Date.now() + timeoutMs;
+	let last = first;
+	let sawWorking = false;
+	let wasIdle = false;
+	let outage: string | undefined;
+	for (;;) {
+		const { detail, conversation } = last;
+		const launch = detail.claudeWorker?.state;
+		sawWorking ||= conversation.working;
+		const idle = outage === undefined && (launch === "failed" || launch === "stalled" || isWorkerIdle(claudeState(detail, conversation)));
+		const settled = idle && (wasIdle || sawWorking);
+		const cancelled = signal?.aborted === true;
+		if (settled || cancelled || Date.now() + claudeWaitMs > until) return { last, settled, timedOut: !settled && !cancelled, cancelled, ...(outage ? { outage } : {}) };
+		wasIdle = idle;
+		await sleep(claudeWaitMs, undefined, { signal }).catch(() => {});
+		if (signal?.aborted) continue;
+		let next: ClaudeThread | undefined;
+		try {
+			next = await readClaudeThread(nexus, thread, signal);
+		} catch (err) {
+			if (signal?.aborted) continue;
+			if (!(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) throw err;
+			outage = err.message;
+			continue;
+		}
+		if (next === undefined) throw new NexusError("failed", `${thread} is no longer a Claude Code worker thread`);
+		last = next;
+		outage = undefined;
+	}
 }

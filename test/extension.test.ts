@@ -302,7 +302,7 @@ describe("/nexus", () => {
 	});
 
 	test("a shutdown ends a model's wait", async () => {
-		const n = load({ watch: [{ event: reset(idA, [user(1, "hi")]) }, { event: state(idA, working) }], watchHold: true });
+		const n = load({ responses: { show: detail }, watch: [{ event: reset(idA, [user(1, "hi")]) }, { event: state(idA, working) }], watchHold: true });
 		const wait = n.tool("nexus_wait", { thread: idA });
 		await until(() => n.calls().some((c) => c[0] === "watch"));
 		n.shutdown();

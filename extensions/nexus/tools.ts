@@ -5,9 +5,9 @@
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema, type Static } from "typebox";
-import { addModelProject, listProjects, listThreads, previewPort, readThread, sendText, startThread, threadId, unpreviewPort, waitThread, type Nexus } from "./cli.ts";
-import type { ListeningPort, ThreadState } from "./contract.ts";
-import { ago, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
+import { addModelProject, listProjects, listThreads, previewPort, readClaudeThread, readThread, sendText, startThread, threadId, unpreviewPort, waitClaude, waitThread, type Nexus } from "./cli.ts";
+import type { ListeningPort, ThreadDetail, ThreadState } from "./contract.ts";
+import { ago, claudeReply, claudeState, claudeTranscript, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
 
 const readChars = 6_000;
 const replyChars = 4_000;
@@ -45,6 +45,10 @@ const stateFields = (state: ThreadState | undefined) =>
 		...(state.failed ? { failed: state.failed } : {}),
 		ports: state.ports && state.ports.map(portFacts),
 	};
+
+/** A Claude Code worker's launch for the model, a failed one with the newest lines of its diagnostic. */
+const workerFields = ({ claudeWorker: worker }: ThreadDetail) =>
+	worker ? { worker: { state: worker.state, model: worker.model, ...(worker.message ? { message: keepTail(worker.message, 1_000) } : {}) } } : {};
 
 /**
  * A tool whose result is compact JSON. A failure throws, which pi reports to the model as a failed tool call, with
@@ -114,7 +118,7 @@ export function nexusTools(nexus: Nexus) {
 					project: t.project,
 					title: t.title,
 					status: t.status,
-					working: t.agentTurnRunning,
+					working: t.agentTurnRunning || t.sessionTurnRunning === true,
 					active: `${ago(now - lastActivityAt(t))} ago`,
 				}));
 			},
@@ -124,15 +128,24 @@ export function nexusTools(nexus: Nexus) {
 				name: "nexus_start",
 				label: "Nexus start",
 				description:
-					"Start a Nexus thread on a project with a first message for its agent, and return its id. The agent works on its own; use nexus_wait for its reply.",
+					"Start a Nexus thread on a project with a first message for its agent, or with claude: true for a Claude Code worker, and return its id. The agent works on its own; use nexus_wait for its reply.",
 				parameters: Type.Object(
-					{ project: Type.String(), message: Type.String(), title: Type.Optional(Type.String({ description: "Defaults to the first line of message" })) },
+					{
+						project: Type.String(),
+						message: Type.String(),
+						title: Type.Optional(Type.String({ description: "Defaults to the first line of message" })),
+						claude: Type.Optional(Type.Boolean({ description: "Start a Claude Code worker whose first prompt is message, instead of the Nexus agent" })),
+						model: Type.Optional(Type.String({ description: "The Claude Code worker's model; needs claude: true. Defaults to Nexus's" })),
+						node: Type.Optional(Type.String({ description: "The node to run on. Defaults to the project's" })),
+					},
 					{ additionalProperties: false },
 				),
 			},
-			async ({ project, message, title }, signal) => {
+			async ({ project, message, title, claude, model, node }, signal) => {
 				if (!project.trim() || !message.trim()) throw new Error("project and message are required");
-				const t = await startThread(nexus, { project: project.trim(), message: message.trim(), ...(title?.trim() ? { title: title.trim() } : {}) }, signal);
+				if (model?.trim() && claude !== true) throw new Error("model needs claude: true");
+				const first = claude === true ? { claude: message.trim(), ...(model?.trim() ? { model: model.trim() } : {}) } : { message: message.trim() };
+				const t = await startThread(nexus, { project: project.trim(), ...first, ...(title?.trim() ? { title: title.trim() } : {}), ...(node?.trim() ? { node: node.trim() } : {}) }, signal);
 				return { id: t.id, project: t.project, title: t.title };
 			},
 		),
@@ -145,8 +158,8 @@ export function nexusTools(nexus: Nexus) {
 			},
 			async (params, signal) => {
 				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
-				await sendText(nexus, thread, required(params.text, "text"), false, signal);
-				return { thread, sent: true };
+				const sent = await sendText(nexus, thread, required(params.text, "text"), false, signal);
+				return { thread, sent: true, ...("claude" in sent ? { claude: { outcome: sent.claude.outcome, resumed: sent.claude.resumed } } : {}) };
 			},
 		),
 		jsonTool(
@@ -159,6 +172,11 @@ export function nexusTools(nexus: Nexus) {
 			},
 			async (params, signal) => {
 				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
+				const claude = await readClaudeThread(nexus, thread, signal);
+				if (claude) {
+					const { detail, conversation } = claude;
+					return { thread, ...stateFields(claudeState(detail, conversation)), ...workerFields(detail), conversation: claudeTranscript(conversation, readChars) };
+				}
 				const view = await readThread(nexus, thread, signal);
 				return { thread, ...stateFields(view.state), conversation: transcript(view.entries, readChars) };
 			},
@@ -177,6 +195,23 @@ export function nexusTools(nexus: Nexus) {
 			async (params, signal) => {
 				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
 				const seconds = params.timeout_seconds === undefined ? 300 : Math.min(600, Math.max(1, Math.round(params.timeout_seconds)));
+				const claude = await readClaudeThread(nexus, thread, signal);
+				if (claude) {
+					const { last, settled, timedOut, cancelled, outage } = await waitClaude(nexus, thread, claude, seconds * 1000, signal);
+					const state = claudeState(last.detail, last.conversation);
+					const reply = claudeReply(last.conversation);
+					return {
+						thread,
+						settled,
+						...(timedOut ? { timed_out: true } : {}),
+						...(cancelled ? { cancelled: true } : {}),
+						...stateFields(state),
+						...workerFields(last.detail),
+						...(outage ? { outage } : {}),
+						...(needsHuman(state) ? { needs_human: needsHuman(state) } : {}),
+						reply: reply ? keepTail(reply, replyChars) : null,
+					};
+				}
 				const { view, settled, timedOut, cancelled } = await waitThread(nexus, thread, seconds * 1000, signal);
 				const reply = latestReply(view.entries);
 				return {

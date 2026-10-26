@@ -2,7 +2,7 @@
  * What pi-nexus makes of a Nexus thread, from the shapes in contract.ts. The settle rule, the trims and the thread
  * matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
  */
-import type { ClaudeConversation, ClaudeEntry, LiveRun, Part, RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
+import type { ClaudeConversation, ClaudeEntry, LiveRun, Part, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
 
 /** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
 export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
@@ -203,6 +203,33 @@ export function claudeTranscript(c: ClaudeConversation, max: number): string {
 		...(c.working ? ["(Claude is working)"] : []),
 	];
 	return keepTail(parts.length > 0 ? parts.join("\n\n") : claudeUnwritten(c), max);
+}
+
+/** A Claude worker thread's state for the model tools, from its details and its transcript, as a watch's `state` reports a Nexus agent's. */
+export const claudeState = (detail: ThreadDetail, c: ClaudeConversation): ThreadState => ({
+	status: detail.thread.status,
+	run: detail.agent?.parkedTasks ? "parked" : c.working ? "working" : "idle",
+	parkedTasks: detail.agent?.parkedTasks ?? 0,
+	queued: claudeQueued(c.entries).length,
+	pylon: detail.pylon.actualState,
+	failed: detail.pylon.failed,
+	ports: detail.ports,
+});
+
+/**
+ * Whether a Claude worker is done for now: it can no longer run (archived, deleted, parked, a failed pylon), or its
+ * session's turn is over with nothing queued, even when the transcript ends at a prompt it never answered.
+ */
+export function isWorkerIdle(state: ThreadState): boolean {
+	if (state.status === "archived" || state.status === "deleted" || state.run === "parked" || state.pylon === "failed" || state.failed !== null) return true;
+	return state.run === "idle" && state.queued === 0;
+}
+
+/** Claude's replies since the person's last prompt, a blank line apart, or undefined when the latest turn wrote none. */
+export function claudeReply(c: ClaudeConversation): string | undefined {
+	const asked = c.entries.map((e) => e.kind === "prompt" && e.from !== "other" && e.text.trim() !== "").lastIndexOf(true);
+	const texts = c.entries.slice(asked + 1).flatMap((e) => (e.kind === "reply" && e.text.trim() ? [e.text.trim()] : []));
+	return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
 export function stateLine(state: ThreadState): string {
