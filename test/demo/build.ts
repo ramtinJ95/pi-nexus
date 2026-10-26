@@ -84,6 +84,9 @@ const working = { status: "active", run: "working", parkedTasks: 0, queued: stre
 const now = new Date().toISOString();
 const detail = {
 	thread: { id: thread, title: "Fix the probe retry", project: "demo", status: "active", agentTurnRunning: true, createdAt: asked, conversationId: "conv-demo", lastHumanActivityAt: asked, lastAgentActivityAt: Date.now() },
+	seenAt: asked - 1_800_000,
+	lastReplyAt: asked - 1_800_000,
+	attention: "working",
 	pylon: { id: "py-demo", node: "firebat", actualState: "running", failed: null, observedAt: now, retryRefused: null },
 	sessions: [
 		{ id: "%1", state: "running", message: null, harness: "pi", herdrPane: "%1", status: "working", harnessSessionId: null },
@@ -132,14 +135,17 @@ const other = (id: string, title: string, extra: object) => ({
 	createdAt: asked - 3_600_000,
 	lastHumanActivityAt: asked - 3_000_000,
 	lastAgentActivityAt: asked - 600_000,
+	seenAt: asked - 3_000_000,
+	lastReplyAt: asked - 3_000_000,
+	attention: null,
 	desired: "running",
 	pylon: { node: "firebat", actualState: "running", failed: null },
 	...extra,
 });
 const threads = [
-	{ ...detail.thread, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null } },
-	other("th-0123456789cd", "Document the retry", {}),
-	other("th-0123456789ef", "Upgrade the probe's deps", { pylon: { node: "firebat", actualState: "failed", failed: "git clone: permission denied" } }),
+	{ ...detail.thread, seenAt: detail.seenAt, lastReplyAt: detail.lastReplyAt, attention: detail.attention, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null } },
+	other("th-0123456789cd", "Document the retry", { lastReplyAt: asked - 600_000, attention: "reply" }),
+	other("th-0123456789ef", "Upgrade the probe's deps", { attention: "failed", pylon: { node: "firebat", actualState: "failed", failed: "git clone: permission denied" } }),
 	other("th-00000000aaaa", "Spike: probe over HTTP/3", { status: "archived", desired: "paused", pylon: { node: "firebat", actualState: "paused", failed: null } }),
 	other("th-0000000051e0", "Landing page copy", { project: "site", pylon: { node: "nuc", actualState: "paused", failed: null }, desired: "paused" }),
 ];

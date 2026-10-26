@@ -185,25 +185,25 @@ describe("checkout CLI contract", () => {
 	test("validates replies and protects both rename paths from flags", async () => {
 		const fake = fakeNexus({ responses: { changes: changed(), diff } }); cleanup.push(fake.cleanup);
 		const nexus = createNexus(fake.bin);
-		expect(await readChanges(nexus, idA, true)).toEqual(changed());
-		expect(await readDiff(nexus, idA, ["--new.ts", "old name.ts"], false)).toEqual(diff);
+		expect(await readChanges(nexus, idA, "head")).toEqual(changed());
+		expect(await readDiff(nexus, idA, ["--new.ts", "old name.ts"], "start")).toEqual(diff);
 		expect(fake.calls()).toEqual([["changes", "--json", "--uncommitted", "--", idA], ["diff", "--json", "--", idA, "--new.ts", "old name.ts"]]);
 	});
 	test("old CLI says to update, missing fields fail, and no-base refusal retains the CLI message", async () => {
 		for (const command of ["changes", "diff"] as const) {
 			const fake = fakeNexus({ fail: { [command]: { exit: 64, kind: "invalid", error: `unknown command ${command}` } } }); cleanup.push(fake.cleanup);
 			const nexus = createNexus(fake.bin);
-			await expect(command === "changes" ? readChanges(nexus, idA, false) : readDiff(nexus, idA, [], false)).rejects.toThrow("needs Nexus CLI 0.6.0 or later (nexus --version). Update the nexus CLI.");
+			await expect(command === "changes" ? readChanges(nexus, idA, "start") : readDiff(nexus, idA, [], "start")).rejects.toThrow("needs Nexus CLI 0.6.0 or later (nexus --version). Update the nexus CLI.");
 		}
 		const missing = fakeNexus({ responses: { changes: { ...changed(), base: { kind: "start" } } } }); cleanup.push(missing.cleanup);
-		await expect(readChanges(createNexus(missing.bin), idA, false)).rejects.toThrow("commit");
+		await expect(readChanges(createNexus(missing.bin), idA, "start")).rejects.toThrow("commit");
 		const noBase = fakeNexus({ fail: { changes: { exit: 1, kind: "failed", error: "Ask for the changes since HEAD instead" } } }); cleanup.push(noBase.cleanup);
-		await expect(readChanges(createNexus(noBase.bin), idA, false)).rejects.toThrow("Ask for the changes since HEAD instead");
+		await expect(readChanges(createNexus(noBase.bin), idA, "start")).rejects.toThrow("Ask for the changes since HEAD instead");
 	});
 	test("aborting the checkout stops a real CLI child", async () => {
 		const fake = fakeNexus({ responses: { changes: changed() }, delayMs: { changes: 10_000 } }); cleanup.push(fake.cleanup);
 		const stop = new AbortController();
-		const result = readChanges(createNexus(fake.bin), idA, false, stop.signal);
+		const result = readChanges(createNexus(fake.bin), idA, "start", stop.signal);
 		stop.abort();
 		await expect(result).rejects.toThrow("aborted");
 	});

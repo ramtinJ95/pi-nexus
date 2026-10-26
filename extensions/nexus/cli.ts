@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Type } from "typebox";
-import { Changes, Diff, NodeSummary, OpenedSession, parse, parseDetail, Preview, Project, SessionClosed, Thread, ThreadRow, Unpreviewed, watchEvents, type ThreadState, type WatchEvent } from "./contract.ts";
+import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
 import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
@@ -169,23 +169,52 @@ export async function startThread(
  * Sends `text` as it is, after `--` so that no part of it reads as a flag. A retry of a send whose reply was lost
  * passes the same `requestId`, so the API takes it as the same message.
  */
-export const sendText = (nexus: Nexus, thread: string, text: string, steer: boolean, signal?: AbortSignal, requestId?: string) =>
-	nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal);
+export const sendText = async (nexus: Nexus, thread: string, text: string, steer: boolean, signal?: AbortSignal, requestId?: string): Promise<Sent> =>
+	parse(Sent, await nexus.run(["send", thread, ...(steer ? ["--steer"] : []), ...(requestId ? [`--request-id=${requestId}`] : []), "--", text], signal), "nexus send");
 
 export const showThread = async (nexus: Nexus, thread: string, signal?: AbortSignal) =>
 	parseDetail(await nexus.run(["show", thread], signal), `nexus show ${thread}`);
 
-export async function readChanges(nexus: Nexus, thread: string, uncommitted: boolean, signal?: AbortSignal): Promise<Changes> {
+/** The flag that picks `base`, after the version check `turn` needs. `--turn` came with CLI 0.11.0. */
+async function baseFlags(nexus: Nexus, base: Base["kind"], signal?: AbortSignal): Promise<string[]> {
+	if (base === "head") return ["--uncommitted"];
+	if (base === "start") return [];
+	await requireVersion(nexus, [0, 11, 0], "reading the latest turn's changes", signal);
+	return ["--turn"];
+}
+
+export async function readChanges(nexus: Nexus, thread: string, base: Base["kind"], signal?: AbortSignal): Promise<Changes> {
+	const flags = await baseFlags(nexus, base, signal);
 	try {
-		return parse(Changes, await nexus.run(["changes", ...(uncommitted ? ["--uncommitted"] : []), "--", thread], signal), "nexus changes");
+		return parse(Changes, await nexus.run(["changes", ...flags, "--", thread], signal), "nexus changes");
 	} catch (err) { throw newer(err, "changes", "reading changes", "0.6.0", true); }
 }
 
-export async function readDiff(nexus: Nexus, thread: string, paths: readonly string[], uncommitted: boolean, signal?: AbortSignal): Promise<Diff> {
+export async function readDiff(nexus: Nexus, thread: string, paths: readonly string[], base: Base["kind"], signal?: AbortSignal): Promise<Diff> {
+	const flags = await baseFlags(nexus, base, signal);
 	try {
-		return parse(Diff, await nexus.run(["diff", ...(uncommitted ? ["--uncommitted"] : []), "--", thread, ...paths], signal), "nexus diff");
+		return parse(Diff, await nexus.run(["diff", ...flags, "--", thread, ...paths], signal), "nexus diff");
 	} catch (err) { throw newer(err, "diff", "reading diffs", "0.6.0", true); }
 }
+
+/**
+ * Marks the thread's latest reply seen, for every client, which needs CLI 0.10.0. It never wakes a pylon and is not
+ * human activity.
+ */
+export async function markSeen(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<void> {
+	await requireVersion(nexus, [0, 10, 0], "marking a reply seen", signal);
+	parse(Seen, await nexus.run(["seen", "--", thread], signal), "nexus seen");
+}
+
+/**
+ * A Claude worker's transcript, which needs CLI 0.17.0. Reading never wakes a pylon and is not human activity, but
+ * each read makes the control plane read the pylon for up to 5 seconds.
+ */
+export async function readConversation(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<ClaudeConversation> {
+	await requireVersion(nexus, [0, 17, 0], "reading a Claude worker's transcript", signal);
+	return parseConversation(await nexus.run(["conversation", "--", thread], signal), `nexus conversation ${thread}`);
+}
+
 /** The `thread:port` pairs a publish or unpublish runs on, for each Nexus the session drives. */
 const portsChanging = new WeakMap<Nexus, Set<string>>();
 

@@ -428,8 +428,8 @@ export class Console {
 			checkout: {
 				uncommitted: this.settings.read().uncommitted ?? false,
 				actions: {
-					changes: (base, aborted) => readChanges(nexus, thread, base, AbortSignal.any([signal, aborted])),
-					diff: (paths, base, aborted) => readDiff(nexus, thread, paths, base, AbortSignal.any([signal, aborted])),
+					changes: (uncommitted, aborted) => readChanges(nexus, thread, uncommitted ? "head" : "start", AbortSignal.any([signal, aborted])),
+					diff: (paths, uncommitted, aborted) => readDiff(nexus, thread, paths, uncommitted ? "head" : "start", AbortSignal.any([signal, aborted])),
 					persist: (uncommitted) => this.settings.update({ uncommitted }),
 				},
 			},

@@ -65,6 +65,9 @@ export const live: LiveRun = { queued: ["also update the docs"], tools: [{ callI
 
 export const detail: ThreadDetail = {
 	thread: thread(idA, { project: "nexus", title: "Fix the probe retry", agentTurnRunning: true, conversationId: "conv-1", lastHumanActivityAt: asked, lastAgentActivityAt: asked }),
+	seenAt: null,
+	lastReplyAt: null,
+	attention: "working",
 	pylon: { id: "py-0123", node: "firebat", actualState: "running", failed: null, observedAt: new Date(asked).toISOString(), retryRefused: null },
 	sessions: [{ id: "%3", state: "running", message: null, harness: "pi", herdrPane: "%3", status: "working", harnessSessionId: "abc" }],
 	previews: [webPreview],

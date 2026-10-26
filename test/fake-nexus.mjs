@@ -27,7 +27,7 @@ if (process.env.FAKE_NEXUS_PIDS) {
 
 if (command === "--version") {
 	// The CLI prints its version as text, without --json.
-	process.stdout.write(`nexus ${scenario.version ?? "0.9.0"}\n`);
+	process.stdout.write(`nexus ${scenario.version ?? "0.17.0"}\n`);
 } else if (command === "attach") {
 	// The terminal is the attach's, and it prints nothing of its own. `attachSignal` stands in for Ctrl+C.
 	if (scenario.delayMs?.attach) await new Promise((resolve) => setTimeout(resolve, scenario.delayMs.attach));
@@ -56,8 +56,8 @@ if (command === "--version") {
 	const adds = existsSync(added) ? readFileSync(added, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 	let reply = command === "projects" && adds.length > 0 ? [...(responses.projects ?? []), ...adds] : responses[command];
 	if (scenario.checkout && (command === "changes" || command === "diff")) {
-		const { values, positionals } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" }, uncommitted: { type: "boolean" } }, allowPositionals: true });
-		reply = { ...reply, base: { ...reply.base, kind: values.uncommitted ? "head" : "start" } };
+		const { values, positionals } = parseArgs({ args: argv.slice(1), options: { json: { type: "boolean" }, uncommitted: { type: "boolean" }, turn: { type: "boolean" } }, allowPositionals: true });
+		reply = { ...reply, base: { ...reply.base, kind: values.turn ? "turn" : values.uncommitted ? "head" : "start" } };
 		if (command === "diff") {
 			const path = positionals[1];
 			if (path === "assets/probe.png") reply.diff = "Binary files /dev/null and b/assets/probe.png differ\n";

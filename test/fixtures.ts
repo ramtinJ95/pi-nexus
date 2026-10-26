@@ -23,9 +23,9 @@ export function thread(id: string, extra: Partial<Thread> = {}): Thread {
 	};
 }
 
-/** A thread as a row of `nexus threads`, with its pylon running unless `extra` says otherwise. */
+/** A thread as a row of `nexus threads`, with its pylon running and nothing to show unless `extra` says otherwise. */
 export function row(id: string, extra: Partial<ThreadRow> = {}): ThreadRow {
-	return { ...thread(id), desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
+	return { ...thread(id), seenAt: null, lastReplyAt: null, attention: null, desired: "running", pylon: { node: "firebat", actualState: "running", failed: null }, ...extra };
 }
 
 export const threads = [row(idA, { agentTurnRunning: true }), row(idB), row(idC, { status: "archived" })];
@@ -64,7 +64,7 @@ export interface Scenario {
 	delayMs?: Record<string, number>;
 	/** The signal that stops `attach`, as Ctrl+C stops the CLI. */
 	attachSignal?: string;
-	/** What `nexus --version` prints after `nexus `, 0.9.0 unless given. */
+	/** What `nexus --version` prints after `nexus `, 0.17.0 unless given. */
 	version?: string;
 }
 
@@ -107,7 +107,7 @@ export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 		},
 		async attach() {},
 		async version() {
-			return "nexus 0.9.0\n";
+			return "nexus 0.17.0\n";
 		},
 	};
 }
