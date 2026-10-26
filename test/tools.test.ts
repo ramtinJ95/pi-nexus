@@ -496,11 +496,45 @@ describe("model tools", () => {
 			expect(calls().filter((c) => c[0] === "conversation")).toHaveLength(2);
 		});
 
-		test("nexus_wait settles an idle worker only on a second idle reading, and a failed launch with its diagnostic", async () => {
-			const { call } = setup({ responses: { show: { ...claudeDetail, claudeWorker: { model: null, state: "stalled", message: "pane: claude: command not found" } }, conversation: conversation(false, [asked]) } });
+		test("nexus_wait settles an idle worker only on a second idle reading", async () => {
+			const { call, calls } = setup({ responses: { show: claudeDetail, conversation: conversation(false, [asked]) } });
+			expect(await call("nexus_wait", { thread: idA })).toMatchObject({ settled: true, reply: null });
+			expect(calls().filter((c) => c[0] === "conversation")).toHaveLength(2);
+		});
+
+		test("nexus_wait settles at once on a failed launch, with its diagnostic, and on a thread that cannot run on", async () => {
+			const stalled = { ...claudeDetail, claudeWorker: { model: null, state: "stalled", message: "pane: claude: command not found" } };
+			const archived = { ...claudeDetail, thread: { ...claudeDetail.thread, status: "archived" }, claudeWorker: { model: null, state: "starting" } };
+			for (const [show, worker] of [[stalled, { state: "stalled", model: null, message: "pane: claude: command not found" }], [archived, { state: "starting", model: null }]] as const) {
+				const { call, calls } = setup({ responses: { show, conversation: conversation(false, []) } });
+				expect(await call("nexus_wait", { thread: idA })).toMatchObject({ settled: true, worker, reply: null });
+				expect(calls().filter((c) => c[0] === "conversation")).toHaveLength(1);
+			}
+		});
+
+		test("a started worker with only a notice is still launching, but one this wait saw work settles with no transcript", async () => {
+			const notice = { kind: "notice", at: 1, tone: "info", text: "Claude Code started" };
+			const quiet = setup({ responses: { show: claudeDetail, conversation: conversation(false, [notice]) } });
+			expect(await quiet.call("nexus_wait", { thread: idA, timeout_seconds: 3 })).toMatchObject({ settled: false, timed_out: true });
+			const worked = setup({ responses: { show: claudeDetail, conversation: conversation(true, []) }, after: { conversation: { conversation: conversation(false, []) } } });
+			expect(await worked.call("nexus_wait", { thread: idA })).toMatchObject({ settled: true, reply: null });
+		});
+
+		test("nexus_wait whose first reading outlives the timeout or a cancel gives only that", async () => {
+			const timed = setup({ responses: { show: claudeDetail }, delayMs: { show: 1_500 } });
 			const started = Date.now();
-			expect(await call("nexus_wait", { thread: idA })).toMatchObject({ settled: true, worker: { state: "stalled", model: null, message: "pane: claude: command not found" }, reply: null });
-			expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+			expect(await timed.call("nexus_wait", { thread: idA, timeout_seconds: 1 })).toEqual({ thread: idA, settled: false, timed_out: true });
+			expect(Date.now() - started).toBeLessThan(1_400);
+			const stop = new AbortController();
+			setTimeout(() => stop.abort(), 300);
+			const cancelled = setup({ responses: { show: claudeDetail }, delayMs: { show: 1_500 } });
+			expect(await cancelled.call("nexus_wait", { thread: idA }, stop.signal)).toEqual({ thread: idA, settled: false, cancelled: true });
+		});
+
+		test("nexus_read shows a result whose call the window dropped", async () => {
+			const orphan = { kind: "claude", entries: [{ kind: "result", at: 3, toolUseId: "toolu_0", output: "FAIL: expected 1 but got 2", isError: true }, { kind: "reply", at: 4, text: "The test fails." }], dropped: 40, readAt: 9, working: false };
+			const { call } = setup({ responses: { show: claudeDetail, conversation: orphan } });
+			expect((await call("nexus_read", { thread: idA })).conversation).toBe("(40 older entries are not kept)\n\n[tool result] (failed)\nFAIL: expected 1 but got 2\n\nThe test fails.");
 		});
 
 		test("nexus_read gives each tool's and background task's output under it", async () => {

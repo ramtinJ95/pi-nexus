@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Type } from "typebox";
 import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, type ThreadDetail, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
-import { emptyView, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
+import { emptyView, hasWorkerEnded, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** The CLI binary this runs, which a command a person runs themselves names too. */
@@ -551,8 +551,8 @@ export interface ClaudeWaited {
 }
 
 /**
- * Reads a Claude worker thread every `claudeWaitMs` until it is idle, its launch fails, the deadline `until` passes or
- * `signal` aborts. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading
+ * Reads a Claude worker thread every `claudeWaitMs` until it is idle, the deadline `until` passes or `signal` aborts.
+ * A thread that cannot run on or a failed or stalled launch settles at once. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading
  * settles only when the one before it was idle too, unless this wait saw the turn run; a deadline too near for that
  * reading ends the wait unsettled, and so does one that passes during a reading, with the reading before. A cancel
  * leaves it unsettled, since only two completed readings settle it. The rule is the Claude Code Nexus mod's.
@@ -568,7 +568,8 @@ export async function waitClaude(nexus: Nexus, thread: string, first: ClaudeThre
 	};
 	for (;;) {
 		sawWorking ||= last.conversation.working;
-		const idle = outage === undefined && isWorkerIdle(last.detail, last.conversation);
+		if (outage === undefined && hasWorkerEnded(last.detail, last.conversation)) return end(true);
+		const idle = outage === undefined && isWorkerIdle(last.detail, last.conversation, sawWorking);
 		if (idle && (wasIdle || sawWorking)) return end(true);
 		if (signal?.aborted || Date.now() + claudeWaitMs > until) return end(false);
 		wasIdle = idle;

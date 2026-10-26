@@ -225,19 +225,25 @@ export const claudeState = (detail: ThreadDetail, c: ClaudeConversation): Thread
 	ports: detail.ports,
 });
 
-/**
- * Whether a Claude worker is done for now: it can no longer run (archived, deleted, parked, a failed pylon), its launch
- * failed or stalled, or its launch completed and its session's turn is over with nothing queued, even when the
- * transcript ends at a prompt it never answered. A launch completed once it is `started` and a read from the pylon
- * holds its first prompt; until then, an empty, idle transcript is a worker not yet at work.
- */
-export function isWorkerIdle(detail: ThreadDetail, c: ClaudeConversation): boolean {
+/** Whether a Claude worker is done for good: it can no longer run (archived, deleted, parked, a failed pylon) or its launch failed or stalled. */
+export function hasWorkerEnded(detail: ThreadDetail, c: ClaudeConversation): boolean {
 	const state = claudeState(detail, c);
 	if (state.status === "archived" || state.status === "deleted" || state.run === "parked" || state.pylon === "failed" || state.failed !== null) return true;
-	const launch = detail.claudeWorker?.state;
-	if (launch === "failed" || launch === "stalled") return true;
-	if (launch !== "started" || c.readAt === null || (c.entries.length === 0 && c.dropped === 0)) return false;
-	return state.run === "idle" && state.queued === 0;
+	return detail.claudeWorker?.state === "failed" || detail.claudeWorker?.state === "stalled";
+}
+
+/** The transcript entry kinds that show a turn: a prompt Claude took, a reply, a tool call or a turn's end. */
+const turnKinds = new Set(["prompt", "reply", "tool", "turn"]);
+
+/**
+ * Whether a Claude worker's turn is over with nothing queued, even when the transcript ends at a prompt it never
+ * answered. Only a launch that is `started` with a turn to show for it, in the transcript or as `sawWorking` says the
+ * caller saw it run, counts, since a worker still launching is idle with nothing in its transcript.
+ */
+export function isWorkerIdle(detail: ThreadDetail, c: ClaudeConversation, sawWorking: boolean): boolean {
+	const launched = detail.claudeWorker?.state === "started" && (sawWorking || c.dropped > 0 || c.entries.some((e) => turnKinds.has(e.kind)));
+	const state = claudeState(detail, c);
+	return launched && state.run === "idle" && state.queued === 0;
 }
 
 /** Claude's replies since the person's last prompt, a blank line apart, or undefined when the latest turn wrote none. */

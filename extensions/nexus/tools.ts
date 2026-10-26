@@ -5,7 +5,7 @@
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema, type Static } from "typebox";
-import { addModelProject, listProjects, listThreads, previewPort, readClaudeThread, readThread, sendText, startThread, threadId, unpreviewPort, waitClaude, waitThread, type Nexus } from "./cli.ts";
+import { addModelProject, listProjects, listThreads, previewPort, readClaudeThread, readThread, sendText, startThread, threadId, unpreviewPort, waitClaude, waitThread, type ClaudeThread, type Nexus } from "./cli.ts";
 import type { ListeningPort, ThreadDetail, ThreadState } from "./contract.ts";
 import { ago, claudeReply, claudeState, claudeTranscript, keepTail, lastActivityAt, latestReply, NexusError, transcript } from "./thread.ts";
 
@@ -196,7 +196,16 @@ export function nexusTools(nexus: Nexus) {
 				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
 				const seconds = params.timeout_seconds === undefined ? 300 : Math.min(600, Math.max(1, Math.round(params.timeout_seconds)));
 				const until = Date.now() + seconds * 1000;
-				const claude = await readClaudeThread(nexus, thread, signal);
+				// The first reading, which says whether the thread is a Claude Code worker's, counts inside the timeout.
+				const deadline = AbortSignal.timeout(seconds * 1000);
+				let claude: ClaudeThread | undefined;
+				try {
+					claude = await readClaudeThread(nexus, thread, signal ? AbortSignal.any([signal, deadline]) : deadline);
+				} catch (err) {
+					if (signal?.aborted) return { thread, settled: false, cancelled: true };
+					if (deadline.aborted) return { thread, settled: false, timed_out: true };
+					throw err;
+				}
 				if (claude) {
 					const { last, settled, timedOut, cancelled, outage } = await waitClaude(nexus, thread, claude, until, signal);
 					const state = claudeState(last.detail, last.conversation);
