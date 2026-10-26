@@ -221,11 +221,17 @@ export const claudeState = (detail: ThreadDetail, c: ClaudeConversation): Thread
 });
 
 /**
- * Whether a Claude worker is done for now: it can no longer run (archived, deleted, parked, a failed pylon), or its
- * session's turn is over with nothing queued, even when the transcript ends at a prompt it never answered.
+ * Whether a Claude worker is done for now: it can no longer run (archived, deleted, parked, a failed pylon), its launch
+ * failed or stalled, or its launch completed and its session's turn is over with nothing queued, even when the
+ * transcript ends at a prompt it never answered. A launch completed once it is `started` and a read from the pylon
+ * holds its first prompt; until then, an empty, idle transcript is a worker not yet at work.
  */
-export function isWorkerIdle(state: ThreadState): boolean {
+export function isWorkerIdle(detail: ThreadDetail, c: ClaudeConversation): boolean {
+	const state = claudeState(detail, c);
 	if (state.status === "archived" || state.status === "deleted" || state.run === "parked" || state.pylon === "failed" || state.failed !== null) return true;
+	const launch = detail.claudeWorker?.state;
+	if (launch === "failed" || launch === "stalled") return true;
+	if (launch !== "started" || c.readAt === null || (c.entries.length === 0 && c.dropped === 0)) return false;
 	return state.run === "idle" && state.queued === 0;
 }
 

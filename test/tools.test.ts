@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Value } from "typebox/value";
-import { createNexus } from "../extensions/nexus/cli.ts";
+import { createNexus, waitClaude, type Nexus } from "../extensions/nexus/cli.ts";
+import { parseConversation } from "../extensions/nexus/contract.ts";
 import { nexusTools } from "../extensions/nexus/tools.ts";
 import { claudeDetail, detail } from "./console-fixture.ts";
 import { assistant, entry, fakeNexus, head, idA, idB, idle, reset, row, state, thread, threads, toolCall, toolResult, user, working, type Scenario } from "./fixtures.ts";
@@ -500,6 +501,58 @@ describe("model tools", () => {
 			const started = Date.now();
 			expect(await call("nexus_wait", { thread: idA })).toMatchObject({ settled: true, worker: { state: "stalled", model: null, message: "pane: claude: command not found" }, reply: null });
 			expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+		});
+
+		test("nexus_read gives each tool's and background task's output under it", async () => {
+			const failing = [asked, { kind: "tool", at: 2, id: "toolu_1", name: "Bash", input: { command: "npm test" } }, { kind: "result", at: 3, toolUseId: "toolu_1", output: "FAIL: expected 1 but got 2\n", isError: true }, { kind: "task", at: 4, toolUseId: null, status: "completed", summary: "Lint", result: "2 warnings" }];
+			const { call } = setup({ responses: { show: claudeDetail, conversation: conversation(false, failing) } });
+			expect((await call("nexus_read", { thread: idA })).conversation).toBe('> Fix the probe\n\n[tool] Bash {"command":"npm test"} (failed)\nFAIL: expected 1 but got 2\n\n[task] completed: Lint\n2 warnings');
+		});
+
+		test("nexus_wait does not take a worker still launching for one that settled", async () => {
+			const launching = { kind: "claude", entries: [], dropped: 0, readAt: null, working: false };
+			const { call, calls } = setup({ responses: { show: { ...claudeDetail, claudeWorker: { model: null, state: "starting" } }, conversation: launching } });
+			expect(await call("nexus_wait", { thread: idA, timeout_seconds: 3 })).toMatchObject({ settled: false, timed_out: true, worker: { state: "starting" }, reply: null });
+			expect(calls().filter((c) => c[0] === "conversation")).toHaveLength(2);
+		});
+
+		test("nexus_wait cancelled between readings is unsettled, whatever the one reading says", async () => {
+			const { call, calls } = setup({ responses: { show: claudeDetail, conversation: conversation(false, answered) } });
+			const stop = new AbortController();
+			setTimeout(() => stop.abort(), 500);
+			const result = await call("nexus_wait", { thread: idA }, stop.signal);
+			expect(result).toMatchObject({ settled: false, cancelled: true, reply: "Reading it.\n\nFixed." });
+			expect(result.timed_out).toBeUndefined();
+			expect(calls().filter((c) => c[0] === "conversation")).toHaveLength(1);
+		});
+
+		test("a deadline that passes during a reading ends the wait with the reading before", async () => {
+			let reads = 0;
+			const slow: Nexus = {
+				bin: "nexus",
+				async run(args, signal) {
+					if (args[0] === "show") return claudeDetail;
+					if (reads++ === 0) return conversation(false, answered);
+					return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+				},
+				async watch() {},
+				async attach() {},
+				async version() {
+					return "nexus 0.19.0\n";
+				},
+			};
+			const first = { detail: claudeDetail, conversation: parseConversation(await slow.run(["conversation"]), "conversation") };
+			const started = Date.now();
+			const waited = await waitClaude(slow, idA, first, started + 3_000);
+			expect(Date.now() - started).toBeLessThan(3_400);
+			expect(waited).toMatchObject({ settled: false, timedOut: true, cancelled: false, last: first });
+		});
+
+		test("nexus_wait counts its first reading inside the timeout", async () => {
+			const { call } = setup({ responses: { show: claudeDetail, conversation: conversation(true, [asked]) }, delayMs: { conversation: 1_500 } });
+			const started = Date.now();
+			expect(await call("nexus_wait", { thread: idA, timeout_seconds: 3 })).toMatchObject({ settled: false, timed_out: true });
+			expect(Date.now() - started).toBeLessThan(3_000);
 		});
 
 		test("nexus_wait with a timeout too near for a second reading ends unsettled", async () => {

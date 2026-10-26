@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Type } from "typebox";
 import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, type ThreadDetail, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
-import { claudeState, emptyView, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
+import { emptyView, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** The CLI binary this runs, which a command a person runs themselves names too. */
@@ -551,33 +551,35 @@ export interface ClaudeWaited {
 }
 
 /**
- * Reads a Claude worker thread every `claudeWaitMs` until it is idle, its launch fails, `timeoutMs` passes or `signal`
- * aborts. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading settles only
- * when the one before it was idle too, unless this wait saw the turn run; a deadline too near for that reading ends the
- * wait unsettled. The rule is the Claude Code Nexus mod's.
+ * Reads a Claude worker thread every `claudeWaitMs` until it is idle, its launch fails, the deadline `until` passes or
+ * `signal` aborts. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading
+ * settles only when the one before it was idle too, unless this wait saw the turn run; a deadline too near for that
+ * reading ends the wait unsettled, and so does one that passes during a reading, with the reading before. A cancel
+ * leaves it unsettled, since only two completed readings settle it. The rule is the Claude Code Nexus mod's.
  */
-export async function waitClaude(nexus: Nexus, thread: string, first: ClaudeThread, timeoutMs: number, signal?: AbortSignal): Promise<ClaudeWaited> {
-	const until = Date.now() + timeoutMs;
+export async function waitClaude(nexus: Nexus, thread: string, first: ClaudeThread, until: number, signal?: AbortSignal): Promise<ClaudeWaited> {
 	let last = first;
 	let sawWorking = false;
 	let wasIdle = false;
 	let outage: string | undefined;
+	const end = (settled: boolean): ClaudeWaited => {
+		const cancelled = !settled && signal?.aborted === true;
+		return { last, settled, timedOut: !settled && !cancelled, cancelled, ...(outage ? { outage } : {}) };
+	};
 	for (;;) {
-		const { detail, conversation } = last;
-		const launch = detail.claudeWorker?.state;
-		sawWorking ||= conversation.working;
-		const idle = outage === undefined && (launch === "failed" || launch === "stalled" || isWorkerIdle(claudeState(detail, conversation)));
-		const settled = idle && (wasIdle || sawWorking);
-		const cancelled = signal?.aborted === true;
-		if (settled || cancelled || Date.now() + claudeWaitMs > until) return { last, settled, timedOut: !settled && !cancelled, cancelled, ...(outage ? { outage } : {}) };
+		sawWorking ||= last.conversation.working;
+		const idle = outage === undefined && isWorkerIdle(last.detail, last.conversation);
+		if (idle && (wasIdle || sawWorking)) return end(true);
+		if (signal?.aborted || Date.now() + claudeWaitMs > until) return end(false);
 		wasIdle = idle;
 		await sleep(claudeWaitMs, undefined, { signal }).catch(() => {});
-		if (signal?.aborted) continue;
+		if (signal?.aborted) return end(false);
+		const deadline = AbortSignal.timeout(Math.max(0, until - Date.now()));
 		let next: ClaudeThread | undefined;
 		try {
-			next = await readClaudeThread(nexus, thread, signal);
+			next = await readClaudeThread(nexus, thread, signal ? AbortSignal.any([signal, deadline]) : deadline);
 		} catch (err) {
-			if (signal?.aborted) continue;
+			if (signal?.aborted || deadline.aborted) return end(false);
 			if (!(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) throw err;
 			outage = err.message;
 			continue;

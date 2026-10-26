@@ -195,9 +195,10 @@ export function nexusTools(nexus: Nexus) {
 			async (params, signal) => {
 				const thread = await threadId(nexus, required(params.thread, "thread"), signal);
 				const seconds = params.timeout_seconds === undefined ? 300 : Math.min(600, Math.max(1, Math.round(params.timeout_seconds)));
+				const until = Date.now() + seconds * 1000;
 				const claude = await readClaudeThread(nexus, thread, signal);
 				if (claude) {
-					const { last, settled, timedOut, cancelled, outage } = await waitClaude(nexus, thread, claude, seconds * 1000, signal);
+					const { last, settled, timedOut, cancelled, outage } = await waitClaude(nexus, thread, claude, until, signal);
 					const state = claudeState(last.detail, last.conversation);
 					const reply = claudeReply(last.conversation);
 					return {
@@ -212,7 +213,7 @@ export function nexusTools(nexus: Nexus) {
 						reply: reply ? keepTail(reply, replyChars) : null,
 					};
 				}
-				const { view, settled, timedOut, cancelled } = await waitThread(nexus, thread, seconds * 1000, signal);
+				const { view, settled, timedOut, cancelled } = await waitThread(nexus, thread, Math.max(0, until - Date.now()), signal);
 				const reply = latestReply(view.entries);
 				return {
 					thread,
