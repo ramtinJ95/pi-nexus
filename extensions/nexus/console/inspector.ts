@@ -72,6 +72,11 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	w.heading("Outputs", outputs.length);
 	if (outputs.length === 0) lines.push(`   ${t.fg("dim", "No outputs yet.")}`);
 	for (const o of outputs) lines.push(`   ${t.fg("muted", o.kind.padEnd(8))} ${o.ref}`);
+	const review = detail.review;
+	if (review) {
+		w.wrapped(`Nexus review ${review.id}: ${review.phase.kind}, round ${review.rounds.length} of ${review.maxRounds}, by ${review.reviewer} on ${review.models.reviewer}${review.land === null ? "" : ", landing when approved"}`, "muted");
+		if (review.phase.kind === "needs-person") for (const reason of review.phase.reasons ?? []) w.wrapped(`Needs you: ${reason}`, "error");
+	}
 
 	w.heading("Attach from a shell in the pylon");
 	lines.push(`   ${t.fg("mdCode", detail.attach)}`);

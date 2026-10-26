@@ -143,6 +143,21 @@ export type OpenedSession = Static<typeof OpenedSession>;
 /** The reply of `session close`, which has nothing to report. */
 export const SessionClosed = Type.Null();
 
+/**
+ * A review loop of the thread's pull request. `phase.kind` stays a string, so a phase added later reads as one to name
+ * rather than failing the details; `needs-person` carries the reasons it ended for the person.
+ */
+const Review = Type.Object({
+	id: Type.String(),
+	reviewer: Type.String(),
+	models: Type.Object({ reviewer: Type.String() }),
+	maxRounds: Type.Number(),
+	rounds: Type.Array(Type.Unknown()),
+	land: Nullable(Type.Unknown()),
+	phase: Type.Object({ kind: Type.String(), reasons: Type.Optional(Type.Array(Type.String())) }),
+});
+export type Review = Static<typeof Review>;
+
 /** The reply of `show`. */
 export const ThreadDetail = Type.Object({
 	thread: Thread,
@@ -168,6 +183,8 @@ export const ThreadDetail = Type.Object({
 	attach: Type.String(),
 	/** Null for a thread with no conversation. */
 	agent: Nullable(Type.Object({ parkedTasks: Type.Number() })),
+	/** The thread's latest review as a builder, or null. Absent from a control plane older than CLI 0.18.0. */
+	review: Type.Optional(Nullable(Review)),
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 

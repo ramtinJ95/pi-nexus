@@ -224,10 +224,11 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 export type Mark = "needs-you" | "new" | "working";
 
 /**
- * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, or answer a
- * session waiting for input. An attention value this table does not know shows no marker.
+ * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, decide what a
+ * review left to them, or answer a session waiting for input. An attention value this table does not know shows no
+ * marker.
  */
-const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
+const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", decision: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
 
 /** An archived or deleted thread wants nothing. */
 export const markOf = (t: ThreadRow): Mark | null =>

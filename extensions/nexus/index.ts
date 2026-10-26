@@ -215,12 +215,15 @@ class NexusSession {
 				const thread = await id(command.thread);
 				const title = this.threads.find((t) => t.id === thread)?.title;
 				const heading = (line: string) => `${thread}${title ? ` ${title}` : ""}: ${line}`;
-				if ((await showThread(nexus, thread, signal)).claudeWorker !== undefined) {
+				const detail = await showThread(nexus, thread, signal);
+				const phase = detail.review?.phase;
+				const decide = phase?.kind === "needs-person" ? (phase.reasons ?? []).map((reason) => `Needs you: ${reason}\n\n`).join("") : "";
+				if (detail.claudeWorker !== undefined) {
 					const [view, conversation] = await Promise.all([readThread(nexus, thread, signal), readConversation(nexus, thread, signal)]);
-					return this.note({ title: heading(stateLine({ ...view.state, run: conversation.working ? "working" : "idle" })), body: claudeTranscript(conversation, 20_000) });
+					return this.note({ title: heading(stateLine({ ...view.state, run: conversation.working ? "working" : "idle" })), body: decide + claudeTranscript(conversation, 20_000) });
 				}
 				const view = await readThread(nexus, thread, signal);
-				return this.note({ title: heading(stateLine(view.state)), body: transcript(view.entries, 20_000) });
+				return this.note({ title: heading(stateLine(view.state)), body: decide + transcript(view.entries, 20_000) });
 			}
 			case "follow": {
 				const thread = await id(command.thread);

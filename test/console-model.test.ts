@@ -64,6 +64,15 @@ describe("markers", () => {
 		]);
 	});
 
+	test("a review that left a decision to the person needs them, ahead of new replies", () => {
+		const decide = row("th-0000000000dd", { title: "Decide", attention: "decision" });
+		expect(summary([reply, decide])).toBe("nexus 0 working · 1 needs you · 1 new");
+		expect(chips([reply, decide]).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Decide", "needs-you"],
+			["Answered", "new"],
+		]);
+	});
+
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
 		const busy = row(idB, { attention: "reply", lastReplyAt: 5, sessionTurnRunning: true });
 		expect(summary([busy])).toBe("nexus 1 working · 1 new");
