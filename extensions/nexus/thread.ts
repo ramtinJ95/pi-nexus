@@ -218,8 +218,11 @@ export function threadRows(threads: readonly Thread[]): string {
 	return rows.map((r) => r.map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i]!))).join("  ")).join("\n");
 }
 
-/** Whether the thread's agent works: a Nexus agent's turn, or, by the control plane's attention, a Claude worker's. */
-export const isWorking = (t: Pick<ThreadRow, "agentTurnRunning" | "attention">) => t.agentTurnRunning || t.attention === "working";
+/**
+ * Whether the thread's agent works: a Nexus agent's turn, or a session's, a Claude worker's included. Attention is no
+ * help once a reply is unread, since an unread reply outranks working there.
+ */
+export const isWorking = (t: Pick<ThreadRow, "agentTurnRunning" | "sessionTurnRunning" | "attention">) => t.agentTurnRunning || t.sessionTurnRunning === true || t.attention === "working";
 
 export const workingCount = (threads: readonly ThreadRow[]) =>
 	threads.filter((t) => isWorking(t) && t.status !== "deleted").length;

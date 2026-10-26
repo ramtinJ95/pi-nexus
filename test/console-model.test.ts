@@ -24,6 +24,7 @@ import {
 	startHint,
 	stepsSummary,
 	summary,
+	claudeItems,
 	threadState,
 	unread,
 	workingMessage,
@@ -32,7 +33,8 @@ import {
 } from "../extensions/nexus/console/model.ts";
 import type { Session } from "../extensions/nexus/contract.ts";
 import type { RenderedEntry } from "../extensions/nexus/contract.ts";
-import { reduce } from "../extensions/nexus/thread.ts";
+import { parseConversation } from "../extensions/nexus/contract.ts";
+import { contentText, reduce } from "../extensions/nexus/thread.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
 import { asked, detail, editDetails, entries, live, memorySettings, runningCall, working } from "./console-fixture.ts";
 import { idA, idB, idC, idle, row, thread } from "./fixtures.ts";
@@ -62,11 +64,29 @@ describe("markers", () => {
 		]);
 	});
 
+	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
+		const busy = row(idB, { attention: "reply", lastReplyAt: 5, sessionTurnRunning: true });
+		expect(summary([busy])).toBe("nexus 1 working · 1 new");
+	});
+
 	test("a reply is unread until someone marks it seen", () => {
 		expect(unread({ seenAt: null, lastReplyAt: null })).toBe(false);
 		expect(unread({ seenAt: null, lastReplyAt: 5 })).toBe(true);
 		expect(unread({ seenAt: 4, lastReplyAt: 5 })).toBe(true);
 		expect(unread({ seenAt: 5, lastReplyAt: 5 })).toBe(false);
+	});
+});
+
+describe("a Claude worker's transcript", () => {
+	test("an entry keeps its key when the control plane's window drops an entry this client does not know", () => {
+		const read = (entries: unknown[], dropped: number) => parseConversation({ kind: "claude", entries, dropped, readAt: 1, working: false }, "nexus conversation");
+		const prompt = { kind: "prompt", at: 1, text: "Fix the probe", from: "person" };
+		const reply = { kind: "reply", text: "Done." };
+		const keyOf = (items: ReturnType<typeof claudeItems>, text: string) => items.find((i) => i.kind === "assistant" && contentText(i.message.content) === text)?.key;
+		const before = claudeItems(read([prompt, { kind: "hologram" }, reply], 0), null);
+		const after = claudeItems(read([reply, { kind: "reply", text: "And the docs." }], 2), null);
+		expect(keyOf(after, "Done.")).toBe(keyOf(before, "Done.")!);
+		expect(keyOf(after, "And the docs.")).not.toBe(keyOf(before, "Done.")!);
 	});
 });
 

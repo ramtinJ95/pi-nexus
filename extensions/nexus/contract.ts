@@ -47,6 +47,8 @@ const threadFields = {
 	lastHumanActivityAt: Type.Number(),
 	/** Null until the thread's agent has a conversation. */
 	conversationId: Nullable(Type.String()),
+	/** Whether a session in the pylon, a Claude worker's included, runs a turn. Absent from a control plane that reports none. */
+	sessionTurnRunning: Type.Optional(Type.Boolean()),
 };
 
 /**
@@ -222,7 +224,8 @@ const ClaudeConversation = Type.Object({
 	/** Whether a turn of the worker's session runs. */
 	working: Type.Boolean(),
 });
-export type ClaudeConversation = Omit<Static<typeof ClaudeConversation>, "entries"> & { entries: ClaudeEntry[] };
+/** `ordinal` is the entry's place in the control plane's list, the unknown entries counted, so it stays put as they are dropped. */
+export type ClaudeConversation = Omit<Static<typeof ClaudeConversation>, "entries"> & { entries: (ClaudeEntry & { ordinal: number })[] };
 
 /**
  * `conversation`'s reply for a Claude worker thread. The contract asks a consumer to ignore the entry kinds it does
@@ -233,7 +236,7 @@ export function parseConversation(value: unknown, what: string): ClaudeConversat
 	const entries = conversation.entries.flatMap((entry, i) => {
 		const kind = (entry as { kind?: unknown } | null)?.kind;
 		if (typeof kind !== "string" || !Object.hasOwn(claudeEntries, kind)) return [];
-		return [parse(claudeEntries[kind as keyof typeof claudeEntries], entry, `${what}'s entry ${i}`) as ClaudeEntry];
+		return [{ ...(parse(claudeEntries[kind as keyof typeof claudeEntries], entry, `${what}'s entry ${i}`) as ClaudeEntry), ordinal: i }];
 	});
 	return { ...conversation, entries };
 }

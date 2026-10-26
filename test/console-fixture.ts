@@ -6,7 +6,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import type { Display } from "../extensions/nexus/console/transcript.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
 import type { Settings, SettingsStore } from "../extensions/nexus/store.ts";
-import type { AssistantMessage, ClaudeConversation, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
+import type { AssistantMessage, ClaudeConversation, ClaudeEntry, ListeningPort, LiveRun, Message, Preview, RenderedEntry, ThreadDetail, ThreadState, ToolResultMessage } from "../extensions/nexus/contract.ts";
 import { idA, thread } from "./fixtures.ts";
 
 export const asked = 1_700_000_000_000;
@@ -93,7 +93,7 @@ export const claudeIdle: ThreadState = { ...working, run: "idle", queued: 0 };
 /** Claude at work: a prompt, a reply, a finished and a running tool call, a background task, and a queued message. */
 export const claudeConversation: ClaudeConversation = {
 	kind: "claude",
-	entries: [
+	entries: ([
 		{ kind: "prompt", at: asked, text: "Fix the retry in probe.ts so it backs off.", from: "person" },
 		{ kind: "reply", text: "I'll read the probe first." },
 		{ kind: "tool", id: "toolu_1", name: "Read", input: { file_path: "/home/user/workspace/repo/src/probe.ts" } },
@@ -102,7 +102,7 @@ export const claudeConversation: ClaudeConversation = {
 		{ kind: "notice", tone: "error", text: "The model request was interrupted." },
 		{ kind: "tool", id: "toolu_2", name: "Bash", input: { command: "npm test" } },
 		{ kind: "queue", op: "enqueue", text: "also update the docs" },
-	],
+	] satisfies ClaudeEntry[]).map((e, ordinal) => ({ ...e, ordinal })),
 	dropped: 0,
 	readAt: asked,
 	working: true,

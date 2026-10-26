@@ -366,14 +366,14 @@ export function conversationItems(entries: readonly RenderedEntry[], live: LiveR
 
 /**
  * A Claude worker's transcript in the order it was written, as pi draws a session. A tool result pairs with its call
- * by ID; a turn's length and the queue show nowhere here. Keys count from the first entry ever read, so an entry keeps
- * its key while older ones are dropped. `model` is the worker's, which its replies do not name.
+ * by ID; a turn's length and the queue show nowhere here. Keys count from the first entry ever read, entries this
+ * client does not know included, so an entry keeps its key while older ones are dropped. `model` is the worker's, which its replies do not name.
  */
 export function claudeItems(c: ClaudeConversation, model: string | null): Item[] {
 	const items: Item[] = [];
 	const tools = new Map<string, ToolItem>();
-	for (const [i, e] of c.entries.entries()) {
-		const key = `claude:${c.dropped + i}`;
+	for (const e of c.entries) {
+		const key = `claude:${c.dropped + e.ordinal}`;
 		const notice = (text: string, tone: "info" | "error" = "info") => items.push({ kind: "notice", key, text, tone });
 		switch (e.kind) {
 			case "prompt":
