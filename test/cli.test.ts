@@ -41,12 +41,18 @@ describe("the CLI's shared seen state", () => {
 		await expect(listThreads(nexus({ responses: { threads: [old] } }).nexus)).rejects.toThrow(`nexus threads' row for ${idA} has no seenAt, which pi-nexus needs`);
 	});
 
-	test("seen names the reply shown with CLI 0.19.0, and reads no details first", async () => {
+	test("seen names the reply shown with CLI 0.19.0, reading the version once and no details", async () => {
 		const n = nexus({ version: "0.19.0", responses: { seen: null } });
 		await markSeen(n.nexus, idA, 2_000);
-		expect(n.calls()).toEqual([["--version"], ["--version"], ["seen", "--json", "--last-reply-at=2000", "--", idA]]);
+		expect(n.calls()).toEqual([["--version"], ["seen", "--json", "--last-reply-at=2000", "--", idA]]);
 		await markSeen(n.nexus, idA, 3_000);
-		expect(n.calls().slice(3)).toEqual([["seen", "--json", "--last-reply-at=3000", "--", idA]]);
+		expect(n.calls().slice(2)).toEqual([["seen", "--json", "--last-reply-at=3000", "--", idA]]);
+	});
+
+	test("a version that cannot be read marks nothing, rather than counting as old", async () => {
+		const n = nexus({ version: "dev", responses: { seen: null, show: { ...detail, lastReplyAt: 2_000 } } });
+		await expect(markSeen(n.nexus, idA, 2_000)).rejects.toThrow(`${n.bin} --version printed no version ("nexus dev"): marking a reply seen needs Nexus CLI 0.10.0 or later`);
+		expect(n.calls()).toEqual([["--version"]]);
 	});
 
 	test("an older CLI marks the latest reply only while the details still name the one shown and nobody marked it", async () => {
