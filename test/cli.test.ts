@@ -41,15 +41,34 @@ describe("the CLI's shared seen state", () => {
 		await expect(listThreads(nexus({ responses: { threads: [old] } }).nexus)).rejects.toThrow(`nexus threads' row for ${idA} has no seenAt, which pi-nexus needs`);
 	});
 
-	test("seen runs nexus seen after --", async () => {
-		const n = nexus({ responses: { seen: null } });
-		await markSeen(n.nexus, idA);
-		expect(n.calls()).toEqual([["--version"], ["seen", "--json", "--", idA]]);
+	test("seen names the reply shown with CLI 0.19.0, reading the version once and no details", async () => {
+		const n = nexus({ version: "0.19.0", responses: { seen: null } });
+		await markSeen(n.nexus, idA, 2_000);
+		expect(n.calls()).toEqual([["--version"], ["seen", "--json", "--last-reply-at=2000", "--", idA]]);
+		await markSeen(n.nexus, idA, 3_000);
+		expect(n.calls().slice(2)).toEqual([["seen", "--json", "--last-reply-at=3000", "--", idA]]);
+	});
+
+	test("a version that cannot be read marks nothing, rather than counting as old", async () => {
+		const n = nexus({ version: "dev", responses: { seen: null, show: { ...detail, lastReplyAt: 2_000 } } });
+		await expect(markSeen(n.nexus, idA, 2_000)).rejects.toThrow(`${n.bin} --version printed no version ("nexus dev"): marking a reply seen needs Nexus CLI 0.10.0 or later`);
+		expect(n.calls()).toEqual([["--version"]]);
+	});
+
+	test("an older CLI marks the latest reply only while the details still name the one shown and nobody marked it", async () => {
+		const n = nexus({ responses: { seen: null, show: { ...detail, lastReplyAt: 2_000 } } });
+		await markSeen(n.nexus, idA, 2_000);
+		expect(n.calls().filter((c) => c[0] !== "--version")).toEqual([["show", "--json", idA], ["seen", "--json", "--", idA]]);
+		for (const show of [{ ...detail, lastReplyAt: 3_000 }, { ...detail, lastReplyAt: 2_000, seenAt: 2_000 }]) {
+			const skipped = nexus({ responses: { seen: null, show } });
+			await markSeen(skipped.nexus, idA, 2_000);
+			expect(skipped.calls().some((c) => c[0] === "seen")).toBe(false);
+		}
 	});
 
 	test("a CLI older than 0.10.0 is refused before it marks anything", async () => {
 		const n = nexus({ version: "0.9.0" });
-		await expect(markSeen(n.nexus, idA)).rejects.toThrow(`${n.bin} is 0.9.0: marking a reply seen needs Nexus CLI 0.10.0 or later (nexus --version)`);
+		await expect(markSeen(n.nexus, idA, 2_000)).rejects.toThrow(`${n.bin} is 0.9.0: marking a reply seen needs Nexus CLI 0.10.0 or later (nexus --version)`);
 		expect(n.calls()).toEqual([["--version"]]);
 	});
 });

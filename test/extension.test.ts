@@ -260,6 +260,14 @@ describe("/nexus", () => {
 			expect(n.calls().some((c) => c[0] === "watch")).toBe(false);
 		});
 
+		test("show puts each reason a review left to the person before the transcript", async () => {
+			const review = { id: "rv-0a1b2c3d", reviewer: "th-0000000000ee", models: { reviewer: "gpt-6" }, maxRounds: 3, rounds: [], land: null, phase: { kind: "needs-person", reasons: ["The merge policy held the landing."] } };
+			const conversation = { kind: "claude", entries: [{ kind: "reply", at: 4, text: "Fixed." }], dropped: 0, readAt: 6, working: false };
+			const n = load({ responses: { threads, show: { ...claude, attention: "decision", review }, conversation }, watch: [{ event: reset(idA, []) }, { event: state(idA, idle) }], watchHold: true });
+			await n.run(`show ${idA}`);
+			expect(n.notes).toEqual([{ title: `${idA}: active, agent idle, pylon running`, body: "Needs you: The merge policy held the landing.\n\nFixed." }]);
+		});
+
 		test("show notes Claude's transcript as the CLI renders it", async () => {
 			const conversation = {
 				kind: "claude",
@@ -276,7 +284,7 @@ describe("/nexus", () => {
 			};
 			const n = load({ responses: { threads, show: claude, conversation }, watch: [{ event: reset(idA, []) }, { event: state(idA, idle) }], watchHold: true });
 			await n.run(`show ${idA}`);
-			expect(n.notes).toEqual([{ title: `${idA}: active, agent idle, pylon running`, body: '> Fix the probe\n\n[tool] Bash {"command":"npm test"} (ok)\n\nFixed.\n\n[turn] 12s' }]);
+			expect(n.notes).toEqual([{ title: `${idA}: active, agent idle, pylon running`, body: '> Fix the probe\n\n[tool] Bash {"command":"npm test"} (ok)\nok\n\nFixed.\n\n[turn] 12s' }]);
 		});
 	});
 
@@ -294,7 +302,7 @@ describe("/nexus", () => {
 	});
 
 	test("a shutdown ends a model's wait", async () => {
-		const n = load({ watch: [{ event: reset(idA, [user(1, "hi")]) }, { event: state(idA, working) }], watchHold: true });
+		const n = load({ responses: { show: detail }, watch: [{ event: reset(idA, [user(1, "hi")]) }, { event: state(idA, working) }], watchHold: true });
 		const wait = n.tool("nexus_wait", { thread: idA });
 		await until(() => n.calls().some((c) => c[0] === "watch"));
 		n.shutdown();

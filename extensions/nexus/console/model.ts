@@ -224,10 +224,11 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 export type Mark = "needs-you" | "new" | "working";
 
 /**
- * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, or answer a
- * session waiting for input. An attention value this table does not know shows no marker.
+ * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, decide what a
+ * review left to them, or answer a session waiting for input. An attention value this table does not know shows no
+ * marker.
  */
-const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
+const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", decision: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
 
 /** An archived or deleted thread wants nothing. */
 export const markOf = (t: ThreadRow): Mark | null =>
@@ -372,6 +373,7 @@ export function conversationItems(entries: readonly RenderedEntry[], live: LiveR
 export function claudeItems(c: ClaudeConversation, model: string | null): Item[] {
 	const items: Item[] = [];
 	const tools = new Map<string, ToolItem>();
+	const pullRequests = new Set<string>();
 	for (const e of c.entries) {
 		const key = `claude:${c.dropped + e.ordinal}`;
 		const notice = (text: string, tone: "info" | "error" = "info") => items.push({ kind: "notice", key, text, tone });
@@ -398,6 +400,10 @@ export function claudeItems(c: ClaudeConversation, model: string | null): Item[]
 				break;
 			case "notice":
 				notice(e.text, e.tone === "error" ? "error" : "info");
+				break;
+			case "pull-request":
+				if (!pullRequests.has(e.url)) notice(`Opened pull request #${e.number}: ${e.url}`);
+				pullRequests.add(e.url);
 				break;
 			case "record":
 				notice(`${e.type}: ${e.summary}`);

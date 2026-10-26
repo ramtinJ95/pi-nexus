@@ -64,6 +64,15 @@ describe("markers", () => {
 		]);
 	});
 
+	test("a review that left a decision to the person needs them, ahead of new replies", () => {
+		const decide = row("th-0000000000dd", { title: "Decide", attention: "decision" });
+		expect(summary([reply, decide])).toBe("nexus 0 working · 1 needs you · 1 new");
+		expect(chips([reply, decide]).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Decide", "needs-you"],
+			["Answered", "new"],
+		]);
+	});
+
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
 		const busy = row(idB, { attention: "reply", lastReplyAt: 5, sessionTurnRunning: true });
 		expect(summary([busy])).toBe("nexus 1 working · 1 new");
@@ -87,6 +96,15 @@ describe("a Claude worker's transcript", () => {
 		const after = claudeItems(read([reply, { kind: "reply", text: "And the docs." }], 2), null);
 		expect(keyOf(after, "Done.")).toBe(keyOf(before, "Done.")!);
 		expect(keyOf(after, "And the docs.")).not.toBe(keyOf(before, "Done.")!);
+	});
+
+	test("a pull request Claude opened shows once, however often Claude Code wrote its record", () => {
+		const pr = (number: number) => ({ kind: "pull-request", at: 1, number, url: `https://github.com/acme/probe/pull/${number}`, repository: "acme/probe" });
+		const items = claudeItems(parseConversation({ kind: "claude", entries: [pr(12), { kind: "reply", text: "Opened it." }, pr(12), pr(13)], dropped: 0, readAt: 1, working: false }, "nexus conversation"), null);
+		expect(items.flatMap((i) => (i.kind === "notice" ? [i.text] : []))).toEqual([
+			"Opened pull request #12: https://github.com/acme/probe/pull/12",
+			"Opened pull request #13: https://github.com/acme/probe/pull/13",
+		]);
 	});
 });
 

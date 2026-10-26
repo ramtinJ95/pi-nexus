@@ -4,9 +4,10 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Type } from "typebox";
 import { Changes, Diff, NodeSummary, OpenedSession, parse, parseConversation, parseDetail, Preview, Project, Seen, Sent, SessionClosed, Thread, ThreadRow, Unpreviewed, type ThreadDetail, watchEvents, type Base, type ClaudeConversation, type ThreadState, type WatchEvent } from "./contract.ts";
-import { emptyView, isThreadId, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
+import { emptyView, hasWorkerEnded, isThreadId, isWorkerIdle, NexusError, isSettled, portBusy, reduce, resolveThread, type ErrorKind, type ThreadView } from "./thread.ts";
 
 export interface Nexus {
 	/** The CLI binary this runs, which a command a person runs themselves names too. */
@@ -159,13 +160,19 @@ export async function listThreads(nexus: Nexus, args: readonly string[] = [], si
 	}
 }
 
-/** Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title or a message. */
+/**
+ * Starts a thread. `=` keeps a value that starts with a dash from reading as a flag. The CLI needs a title, a message or
+ * a Claude prompt. `claude` starts a Claude Code worker with that first prompt, which needs CLI 0.15.0, and `model`
+ * picks its model, which needs CLI 0.16.0.
+ */
 export async function startThread(
 	nexus: Nexus,
-	start: { project: string; message?: string; title?: string; node?: string; branch?: string },
+	start: { project: string; message?: string; title?: string; node?: string; branch?: string; claude?: string; model?: string },
 	signal?: AbortSignal,
 ): Promise<Thread> {
-	const flags = (["message", "title", "node", "branch"] as const).flatMap((key) => (start[key] ? [`--${key}=${start[key]}`] : []));
+	if (start.model) await requireVersion(nexus, [0, 16, 0], "choosing a Claude Code worker's model", signal);
+	else if (start.claude) await requireVersion(nexus, [0, 15, 0], "starting a Claude Code worker", signal);
+	const flags = (["message", "claude", "model", "title", "node", "branch"] as const).flatMap((key) => (start[key] ? [`--${key}=${start[key]}`] : []));
 	return parse(Thread, await nexus.run(["start", `--project=${start.project}`, ...flags], signal), "nexus start");
 }
 
@@ -222,13 +229,21 @@ export async function readDiff(nexus: Nexus, thread: string, paths: readonly str
 }
 
 /**
- * Marks the thread's latest reply seen, for every client, which needs CLI 0.10.0. It never wakes a pylon and is not
- * human activity.
+ * Marks the reply that ended at `shown`, the one a client showed, seen for every client, which needs CLI 0.10.0. It
+ * never wakes a pylon and is not human activity. CLI 0.19.0 marks only up to `shown`, so a reply that lands after it
+ * stays unread. An older CLI marks the latest reply, so the details are read again first and a newer reply skips the
+ * mark; one that lands between that read and the mark is marked too. The version is read at most once per mark, and one
+ * that cannot be read fails the mark rather than counting as old.
  */
-export async function markSeen(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<void> {
-	await requireVersion(nexus, [0, 10, 0], "marking a reply seen", signal);
-	// The API takes the shown reply's lastReplyAt, so a reply that lands after the caller's check stays unread; once
-	// the CLI has a flag for it, such as --last-reply-at, pass the shown reply here.
+export async function markSeen(nexus: Nexus, thread: string, shown: number, signal?: AbortSignal): Promise<void> {
+	const version = knownVersions(nexus).get("0.19.0") ?? (await readVersion(nexus, [0, 10, 0], "marking a reply seen", signal));
+	if (!isOlder(version, [0, 19, 0])) {
+		knownVersions(nexus).set("0.19.0", version);
+		parse(Seen, await nexus.run(["seen", `--last-reply-at=${shown}`, "--", thread], signal), "nexus seen");
+		return;
+	}
+	const now = await showThread(nexus, thread, signal);
+	if (now.lastReplyAt !== shown || (now.seenAt !== null && now.seenAt >= shown)) return;
 	parse(Seen, await nexus.run(["seen", "--", thread], signal), "nexus seen");
 }
 
@@ -369,20 +384,29 @@ export const isOlder = (version: readonly number[], than: readonly number[]) => 
  */
 const versionsRead = new WeakMap<Nexus, Map<string, number[]>>();
 
+function knownVersions(nexus: Nexus): Map<string, number[]> {
+	const known = versionsRead.get(nexus) ?? new Map<string, number[]>();
+	versionsRead.set(nexus, known);
+	return known;
+}
+
+/** Fails unless the CLI is `needed` or later, as `requireVersion` does, reading its version even when one is known. */
+async function readVersion(nexus: Nexus, needed: readonly number[], doing: string, signal?: AbortSignal): Promise<number[]> {
+	const wanted = needed.join(".");
+	const printed = await nexus.version(signal);
+	const version = parseVersion(printed);
+	if (version === null) throw new NexusError("invalid", `${nexus.bin} --version printed no version (${JSON.stringify(printed.trim().slice(0, 80))}): ${doing} needs Nexus CLI ${wanted} or later`);
+	if (isOlder(version, needed)) throw new NexusError("invalid", `${nexus.bin} is ${version.join(".")}: ${doing} needs Nexus CLI ${wanted} or later (nexus --version)`);
+	knownVersions(nexus).set(wanted, version);
+	return version;
+}
+
 /**
  * Fails unless the CLI is `needed` or later, saying which version `doing` needs. A version that cannot be read
  * fails too, since an older CLI could do the wrong thing.
  */
 async function requireVersion(nexus: Nexus, needed: readonly number[], doing: string, signal?: AbortSignal): Promise<void> {
-	const wanted = needed.join(".");
-	const known = versionsRead.get(nexus) ?? new Map<string, number[]>();
-	versionsRead.set(nexus, known);
-	if (known.has(wanted)) return;
-	const printed = await nexus.version(signal);
-	const version = parseVersion(printed);
-	if (version === null) throw new NexusError("invalid", `${nexus.bin} --version printed no version (${JSON.stringify(printed.trim().slice(0, 80))}): ${doing} needs Nexus CLI ${wanted} or later`);
-	if (isOlder(version, needed)) throw new NexusError("invalid", `${nexus.bin} is ${version.join(".")}: ${doing} needs Nexus CLI ${wanted} or later (nexus --version)`);
-	known.set(wanted, version);
+	if (!knownVersions(nexus).has(needed.join("."))) await readVersion(nexus, needed, doing, signal);
 }
 
 /**
@@ -500,4 +524,69 @@ export async function waitThread(nexus: Nexus, thread: string, timeoutMs: number
 	// A watch that ended by itself ended on the thread's delete.
 	const settled = checked || (!cancelled && !timeout.aborted);
 	return { view, settled, timedOut: timeout.aborted && !settled, cancelled };
+}
+
+/** How often a wait reads a Claude worker thread, as the Claude Code Nexus mod does. */
+const claudeWaitMs = 2_000;
+
+export interface ClaudeThread {
+	detail: ThreadDetail;
+	conversation: ClaudeConversation;
+}
+
+/** A Claude worker thread's details and transcript, or undefined for a thread whose agent is Nexus's, which a watch reports. */
+export async function readClaudeThread(nexus: Nexus, thread: string, signal?: AbortSignal): Promise<ClaudeThread | undefined> {
+	const detail = await showThread(nexus, thread, signal);
+	if (detail.claudeWorker === undefined) return undefined;
+	return { detail, conversation: await readConversation(nexus, thread, signal) };
+}
+
+export interface ClaudeWaited {
+	last: ClaudeThread;
+	settled: boolean;
+	timedOut: boolean;
+	cancelled: boolean;
+	/** Why the last reading failed, while it fails: the wait goes on with the reading before. */
+	outage?: string;
+}
+
+/**
+ * Reads a Claude worker thread every `claudeWaitMs` until it is idle, the deadline `until` passes or `signal` aborts.
+ * A thread that cannot run on or a failed or stalled launch settles at once. A message just typed may not be in the transcript yet, nor its turn reported, so an idle reading
+ * settles only when the one before it was idle too, unless this wait saw the turn run; a deadline too near for that
+ * reading ends the wait unsettled, and so does one that passes during a reading, with the reading before. A cancel
+ * leaves it unsettled, since only two completed readings settle it. The rule is the Claude Code Nexus mod's.
+ */
+export async function waitClaude(nexus: Nexus, thread: string, first: ClaudeThread, until: number, signal?: AbortSignal): Promise<ClaudeWaited> {
+	let last = first;
+	let sawWorking = false;
+	let wasIdle = false;
+	let outage: string | undefined;
+	const end = (settled: boolean): ClaudeWaited => {
+		const cancelled = !settled && signal?.aborted === true;
+		return { last, settled, timedOut: !settled && !cancelled, cancelled, ...(outage ? { outage } : {}) };
+	};
+	for (;;) {
+		sawWorking ||= last.conversation.working;
+		if (outage === undefined && hasWorkerEnded(last.detail, last.conversation)) return end(true);
+		const idle = outage === undefined && isWorkerIdle(last.detail, last.conversation, sawWorking);
+		if (idle && (wasIdle || sawWorking)) return end(true);
+		if (signal?.aborted || Date.now() + claudeWaitMs > until) return end(false);
+		wasIdle = idle;
+		await sleep(claudeWaitMs, undefined, { signal }).catch(() => {});
+		if (signal?.aborted) return end(false);
+		const deadline = AbortSignal.timeout(Math.max(0, until - Date.now()));
+		let next: ClaudeThread | undefined;
+		try {
+			next = await readClaudeThread(nexus, thread, signal ? AbortSignal.any([signal, deadline]) : deadline);
+		} catch (err) {
+			if (signal?.aborted || deadline.aborted) return end(false);
+			if (!(err instanceof NexusError && (err.kind === "unreachable" || err.kind === "failed"))) throw err;
+			outage = err.message;
+			continue;
+		}
+		if (next === undefined) throw new NexusError("failed", `${thread} is no longer a Claude Code worker thread`);
+		last = next;
+		outage = undefined;
+	}
 }

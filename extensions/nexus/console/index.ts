@@ -32,7 +32,7 @@ import { emptyView, isWorking, lastActivityAt, NexusError, reduce, type ThreadVi
 import type { NodeSummary, ThreadDetail, ThreadRow } from "../contract.ts";
 import { inScope, type Scope } from "../scope.ts";
 import type { SettingsStore } from "../store.ts";
-import { attachCommand, isClosed, startArgs, unread } from "./model.ts";
+import { attachCommand, isClosed, startArgs } from "./model.ts";
 import { Picker, type PickerEnd } from "./picker.ts";
 import { ProjectFormView } from "./project-form.ts";
 import { ProjectPicker, type ProjectEnd } from "./project-picker.ts";
@@ -405,17 +405,16 @@ export class Console {
 		/** When a mark that failed in an outage may be tried again, since every draw of the shown reply asks for one. */
 		let markAfter = 0;
 		/**
-		 * Marks `reply` seen, for every client, once the view has shown it. The details are read again first, and a newer
-		 * reply than the one shown skips the mark, which that reply's own showing makes. The session's signal, not the
-		 * view's, ends it, so leaving the thread does not abort a mark under way.
+		 * Marks `reply` seen, for every client, once the view has shown it, unless the details say a client marked it
+		 * already. The session's signal, not the view's, ends it, so leaving the thread does not abort a mark under way.
 		 */
 		const markRead = async (reply: number) => {
 			if (markFailed || marking || Date.now() < markAfter || (marked !== null && reply <= marked)) return;
+			if (latest?.seenAt != null && latest.seenAt >= reply) return;
 			marking = true;
 			marked = reply;
 			try {
-				const now = await showThread(nexus, thread, this.closed);
-				if (now.lastReplyAt === reply && unread(now)) await markSeen(nexus, thread, this.closed);
+				await markSeen(nexus, thread, reply, this.closed);
 			} catch (err) {
 				if (this.closed.aborted) return;
 				// A failure an outage explains marks the reply on a later showing.

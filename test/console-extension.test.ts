@@ -464,14 +464,17 @@ describe("console", () => {
 		await shut;
 	});
 
-	test("a thread whose reply was seen, here or in another client, is not marked again", async () => {
-		const n = load({ ...scenario, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
-		const done = n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
-		n.normal("q");
-		await done;
-		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
-	});
+	for (const version of ["0.17.0", "0.19.0"]) {
+		test(`a thread whose reply was seen, here or in another client, is not marked again, with CLI ${version}`, async () => {
+			const n = load({ ...scenario, watch: answered, version, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			n.normal("q");
+			await done;
+			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+		});
+	}
 
 	test("a CLI older than 0.10.0 cannot mark a reply seen, which one warning says", async () => {
 		const n = load({ ...scenario, watch: answered, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
@@ -658,6 +661,19 @@ describe("console", () => {
 			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first.") && n.calls().filter((c) => c[0] === "show").length >= 2, "the check before the mark");
 			await new Promise((resolve) => setTimeout(resolve, 300));
 			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+			n.normal("q");
+			await done;
+		});
+
+		test("with CLI 0.19.0 the mark names the reply shown, so a newer one stays unread", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const idle = claude({ ...claudeConversation, working: false });
+			const n = load({ ...idle, version: "0.19.0", responses: { ...idle.responses, show: unread, seen: null }, after: { conversation: { show: { ...unread, lastReplyAt: 3_000 } } } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+			expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--last-reply-at=2000", "--", idA]]);
+			const calls = n.calls().map((c) => c[0]);
+			expect(calls.slice(calls.indexOf("conversation"), calls.indexOf("seen"))).not.toContain("show");
 			n.normal("q");
 			await done;
 		});

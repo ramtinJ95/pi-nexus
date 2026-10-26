@@ -2,7 +2,7 @@
  * What pi-nexus makes of a Nexus thread, from the shapes in contract.ts. The settle rule, the trims and the thread
  * matching match the Claude Code Nexus mod's hooks/model.ts, so both agents behave the same.
  */
-import type { ClaudeConversation, ClaudeEntry, LiveRun, Part, RenderedEntry, Thread, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
+import type { ClaudeConversation, ClaudeEntry, LiveRun, Part, RenderedEntry, Thread, ThreadDetail, ThreadRow, ThreadState, WatchEvent } from "./contract.ts";
 
 /** The CLI's failure kinds, and `contract` for a reply that breaks the shape the CLI promises. */
 export type ErrorKind = "failed" | "unreachable" | "refused" | "not-found" | "conflict" | "invalid" | "contract";
@@ -163,28 +163,42 @@ export function claudeQueued(entries: readonly ClaudeEntry[]): (string | null)[]
 export const claudeUnwritten = (c: ClaudeConversation) =>
 	c.readAt === null ? "Claude's transcript has not been read yet. It is read while the pylon runs." : "Claude has not written a transcript yet.";
 
-/** A Claude worker's transcript as the CLI's text renders it, kept to its last `max` characters. */
+/**
+ * A Claude worker's transcript as the CLI's text renders it, with each tool's and background task's output under it, as
+ * the Claude Code Nexus mod gives it, and a result whose call the window dropped on its own, kept to its last `max`
+ * characters.
+ */
 export function claudeTranscript(c: ClaudeConversation, max: number): string {
 	const results = new Map(c.entries.flatMap((e) => (e.kind === "result" ? [[e.toolUseId, e] as const] : [])));
+	const calls = new Set(c.entries.flatMap((e) => (e.kind === "tool" ? [e.id] : [])));
 	const lastTurn = c.entries.map((e) => e.kind).lastIndexOf("turn");
+	const pullRequests = new Set<string>();
 	const lines = c.entries.flatMap((e, i): string[] => {
 		switch (e.kind) {
 			case "prompt":
 				return [`> ${promptLabel(e.from)}${e.text.split("\n").join("\n> ")}`];
 			case "reply":
 				return [e.text];
+			case "result":
+				if (calls.has(e.toolUseId)) return [];
+				return [`[tool result] (${e.isError ? "failed" : "ok"})${e.output.trimEnd() ? `\n${e.output.trimEnd()}` : ""}`];
 			case "tool": {
 				const result = results.get(e.id);
 				const how = result !== undefined ? (result.isError ? "failed" : "ok") : c.working && i > lastTurn ? "running" : "no result";
 				const input = JSON.stringify(e.input);
-				return [`[tool] ${e.name} ${input.length <= 200 ? input : `${input.slice(0, 200)}...`} (${how})`];
+				const output = result?.output.trimEnd();
+				return [`[tool] ${e.name} ${input.length <= 200 ? input : `${input.slice(0, 200)}...`} (${how})${output ? `\n${output}` : ""}`];
 			}
 			case "task":
-				return [`[task] ${e.status}: ${e.summary}`];
+				return [`[task] ${e.status}: ${e.summary}${e.result?.trim() ? `\n${e.result.trimEnd()}` : ""}`];
 			case "notice":
 				return [`[${e.tone === "error" ? "error" : "notice"}] ${e.text}`];
 			case "turn":
 				return [`[turn] ${Math.round(e.durationMs / 1000)}s`];
+			case "pull-request":
+				if (pullRequests.has(e.url)) return [];
+				pullRequests.add(e.url);
+				return [`[pull request] Opened pull request #${e.number}: ${e.url}`];
 			case "record":
 				return [`[record] ${e.type}: ${e.summary}`];
 			default:
@@ -198,6 +212,45 @@ export function claudeTranscript(c: ClaudeConversation, max: number): string {
 		...(c.working ? ["(Claude is working)"] : []),
 	];
 	return keepTail(parts.length > 0 ? parts.join("\n\n") : claudeUnwritten(c), max);
+}
+
+/** A Claude worker thread's state for the model tools, from its details and its transcript, as a watch's `state` reports a Nexus agent's. */
+export const claudeState = (detail: ThreadDetail, c: ClaudeConversation): ThreadState => ({
+	status: detail.thread.status,
+	run: detail.agent?.parkedTasks ? "parked" : c.working ? "working" : "idle",
+	parkedTasks: detail.agent?.parkedTasks ?? 0,
+	queued: claudeQueued(c.entries).length,
+	pylon: detail.pylon.actualState,
+	failed: detail.pylon.failed,
+	ports: detail.ports,
+});
+
+/** Whether a Claude worker is done for good: it can no longer run (archived, deleted, parked, a failed pylon) or its launch failed or stalled. */
+export function hasWorkerEnded(detail: ThreadDetail, c: ClaudeConversation): boolean {
+	const state = claudeState(detail, c);
+	if (state.status === "archived" || state.status === "deleted" || state.run === "parked" || state.pylon === "failed" || state.failed !== null) return true;
+	return detail.claudeWorker?.state === "failed" || detail.claudeWorker?.state === "stalled";
+}
+
+/** The transcript entry kinds that show a turn: a prompt Claude took, a reply, a tool call or a turn's end. */
+const turnKinds = new Set(["prompt", "reply", "tool", "turn"]);
+
+/**
+ * Whether a Claude worker's turn is over with nothing queued, even when the transcript ends at a prompt it never
+ * answered. Only a launch that is `started` with a turn to show for it, in the transcript or as `sawWorking` says the
+ * caller saw it run, counts, since a worker still launching is idle with nothing in its transcript.
+ */
+export function isWorkerIdle(detail: ThreadDetail, c: ClaudeConversation, sawWorking: boolean): boolean {
+	const launched = detail.claudeWorker?.state === "started" && (sawWorking || c.dropped > 0 || c.entries.some((e) => turnKinds.has(e.kind)));
+	const state = claudeState(detail, c);
+	return launched && state.run === "idle" && state.queued === 0;
+}
+
+/** Claude's replies since the person's last prompt, a blank line apart, or undefined when the latest turn wrote none. */
+export function claudeReply(c: ClaudeConversation): string | undefined {
+	const asked = c.entries.map((e) => e.kind === "prompt" && e.from !== "other" && e.text.trim() !== "").lastIndexOf(true);
+	const texts = c.entries.slice(asked + 1).flatMap((e) => (e.kind === "reply" && e.text.trim() ? [e.text.trim()] : []));
+	return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
 export function stateLine(state: ThreadState): string {

@@ -143,6 +143,21 @@ export type OpenedSession = Static<typeof OpenedSession>;
 /** The reply of `session close`, which has nothing to report. */
 export const SessionClosed = Type.Null();
 
+/**
+ * A review loop of the thread's pull request. `phase.kind` stays a string, so a phase added later reads as one to name
+ * rather than failing the details; `needs-person` carries the reasons it ended for the person.
+ */
+const Review = Type.Object({
+	id: Type.String(),
+	reviewer: Type.String(),
+	models: Type.Object({ reviewer: Type.String() }),
+	maxRounds: Type.Number(),
+	rounds: Type.Array(Type.Unknown()),
+	land: Nullable(Type.Unknown()),
+	phase: Type.Object({ kind: Type.String(), reasons: Type.Optional(Type.Array(Type.String())) }),
+});
+export type Review = Static<typeof Review>;
+
 /** The reply of `show`. */
 export const ThreadDetail = Type.Object({
 	thread: Thread,
@@ -168,6 +183,8 @@ export const ThreadDetail = Type.Object({
 	attach: Type.String(),
 	/** Null for a thread with no conversation. */
 	agent: Nullable(Type.Object({ parkedTasks: Type.Number() })),
+	/** The thread's latest review as a builder, or null. Absent from a control plane older than CLI 0.18.0. */
+	review: Type.Optional(Nullable(Review)),
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 
@@ -203,12 +220,14 @@ export const claudeEntries = {
 	tool: Type.Object({ kind: Type.Literal("tool"), id: Type.String(), name: Type.String(), input: Type.Record(Type.String(), Type.Unknown()) }),
 	result: Type.Object({ kind: Type.Literal("result"), toolUseId: Type.String(), output: Type.String(), isError: Type.Boolean() }),
 	/** A background subagent or shell finished. */
-	task: Type.Object({ kind: Type.Literal("task"), status: Type.String(), summary: Type.String() }),
+	task: Type.Object({ kind: Type.Literal("task"), status: Type.String(), summary: Type.String(), result: Type.Optional(Nullable(Type.String())) }),
 	/** A prompt typed while Claude was busy joins its queue on `enqueue`, and leaves it on any other op. */
 	queue: Type.Object({ kind: Type.Literal("queue"), op: Type.String(), text: Nullable(Type.String()) }),
 	/** `tone` is `info` or `error`. */
 	notice: Type.Object({ kind: Type.Literal("notice"), tone: Type.String(), text: Type.String() }),
 	turn: Type.Object({ kind: Type.Literal("turn"), durationMs: Type.Number() }),
+	/** Claude Code writes a pull request's record again each time it saves the session, so only the first per `url` shows. */
+	"pull-request": Type.Object({ kind: Type.Literal("pull-request"), number: Type.Number(), url: Type.String() }),
 	/** A transcript record the control plane does not know, kept visible. */
 	record: Type.Object({ kind: Type.Literal("record"), type: Type.String(), summary: Type.String() }),
 };
