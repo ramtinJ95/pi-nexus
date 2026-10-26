@@ -662,6 +662,29 @@ describe("console", () => {
 			await done;
 		});
 
+		test("a stored transcript read before the details' reply does not mark it seen", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const stale = claude({ ...claudeConversation, working: false, readAt: 1_000 });
+			const n = load({ ...stale, responses: { ...stale.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+			n.normal("q");
+			await done;
+		});
+
+		test("a reply the transcript shows is marked seen while Claude's next turn runs", async () => {
+			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
+			const busy = claude();
+			const n = load({ ...busy, responses: { ...busy.responses, show: unread, seen: null } });
+			const done = n.run(`open ${idA}`);
+			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
+			expect(n.calls().find((c) => c[0] === "seen")).toEqual(["seen", "--json", "--", idA]);
+			n.normal("q");
+			await done;
+		});
+
 		test("a failed read is tried again, and says so once", async () => {
 			const n = load({ ...claude(), fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer", times: 1 } } });
 			const done = n.run(`open ${idA}`);

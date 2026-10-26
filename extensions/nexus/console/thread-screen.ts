@@ -446,10 +446,13 @@ export class ThreadScreen implements Component, Focusable {
 		return this.detail?.claudeWorker !== undefined;
 	}
 
-	/** `reply` is the details' `lastReplyAt` from before the read, which the transcript holds. */
+	/**
+	 * `reply` is the details' `lastReplyAt` from before the read. The transcript holds it only if it was read from the
+	 * pylon at or after it, since the control plane answers with its stored transcript when the pylon cannot be read.
+	 */
 	setConversation(conversation: ClaudeConversation, reply: number | null): void {
 		this.claude = conversation;
-		this.claudeReply = reply;
+		this.claudeReply = reply !== null && conversation.readAt !== null && conversation.readAt >= reply ? reply : null;
 		this.checkoutFacts();
 		this.rebuild();
 	}
@@ -508,14 +511,14 @@ export class ThreadScreen implements Component, Focusable {
 	}
 
 	/**
-	 * The reply the Conversation view shows, or null when it shows none for sure: another view is open, the watch is
-	 * not current, or a turn runs. A Claude worker's is the one its last read transcript holds. A Nexus agent's is the
-	 * details' once the watch has its run idle, since the watch prints an answer's entries before the state that ends
-	 * its turn.
+	 * The reply the Conversation view shows, or null when it shows none for sure: another view is open or the watch is
+	 * not current. A Claude worker's is the one its last read transcript holds, a later turn running or not. A Nexus
+	 * agent's is the details' once the watch has its run idle, since the watch prints an answer's entries before the
+	 * state that ends its turn.
 	 */
 	private shownReply(): number | null {
 		if (this.tab !== "conversation" || this.unwatched || this.view.outage) return null;
-		if (this.isClaude) return this.claude?.working === false ? this.claudeReply : null;
+		if (this.isClaude) return this.claudeReply;
 		const state = this.view.state;
 		return state !== undefined && state.run !== "working" ? (this.detail?.lastReplyAt ?? null) : null;
 	}
