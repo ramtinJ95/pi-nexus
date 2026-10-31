@@ -65,7 +65,7 @@ export interface Scenario {
 	delayMs?: Record<string, number>;
 	/** The signal that stops `attach`, as Ctrl+C stops the CLI. */
 	attachSignal?: string;
-	/** What `nexus --version` prints after `nexus `, 0.17.0 unless given. */
+	/** What `nexus --version` prints after `nexus `, 0.19.0 unless given. */
 	version?: string;
 }
 
@@ -108,7 +108,7 @@ export function scriptedNexus(polls: WatchEvent[][], gapMs = 250): Nexus {
 		},
 		async attach() {},
 		async version() {
-			return "nexus 0.17.0\n";
+			return "nexus 0.19.0\n";
 		},
 	};
 }

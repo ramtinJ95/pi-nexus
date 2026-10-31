@@ -229,22 +229,12 @@ export async function readDiff(nexus: Nexus, thread: string, paths: readonly str
 }
 
 /**
- * Marks the reply that ended at `shown`, the one a client showed, seen for every client, which needs CLI 0.10.0. It
- * never wakes a pylon and is not human activity. CLI 0.19.0 marks only up to `shown`, so a reply that lands after it
- * stays unread. An older CLI marks the latest reply, so the details are read again first and a newer reply skips the
- * mark; one that lands between that read and the mark is marked too. The version is read at most once per mark, and one
- * that cannot be read fails the mark rather than counting as old.
+ * Marks seen, for every client, the reply that ended at `shown`, the one a client showed, which needs CLI 0.19.0 so a
+ * reply that lands after it stays unread. It never wakes a pylon and is not human activity.
  */
 export async function markSeen(nexus: Nexus, thread: string, shown: number, signal?: AbortSignal): Promise<void> {
-	const version = knownVersions(nexus).get("0.19.0") ?? (await readVersion(nexus, [0, 10, 0], "marking a reply seen", signal));
-	if (!isOlder(version, [0, 19, 0])) {
-		knownVersions(nexus).set("0.19.0", version);
-		parse(Seen, await nexus.run(["seen", `--last-reply-at=${shown}`, "--", thread], signal), "nexus seen");
-		return;
-	}
-	const now = await showThread(nexus, thread, signal);
-	if (now.lastReplyAt !== shown || (now.seenAt !== null && now.seenAt >= shown)) return;
-	parse(Seen, await nexus.run(["seen", "--", thread], signal), "nexus seen");
+	await requireVersion(nexus, [0, 19, 0], "marking a reply seen", signal);
+	parse(Seen, await nexus.run(["seen", `--last-reply-at=${shown}`, "--", thread], signal), "nexus seen");
 }
 
 /**
@@ -379,34 +369,25 @@ export const isOlder = (version: readonly number[], than: readonly number[]) => 
 };
 
 /**
- * The CLI versions read that were new enough for what asked, by Nexus. Only those are kept, so a CLI updated after a
- * refusal is read again rather than refused from memory.
+ * The CLI versions found new enough for what asked, by Nexus. Only those are kept, so a CLI updated after a refusal is
+ * read again rather than refused from memory.
  */
-const versionsRead = new WeakMap<Nexus, Map<string, number[]>>();
-
-function knownVersions(nexus: Nexus): Map<string, number[]> {
-	const known = versionsRead.get(nexus) ?? new Map<string, number[]>();
-	versionsRead.set(nexus, known);
-	return known;
-}
-
-/** Fails unless the CLI is `needed` or later, as `requireVersion` does, reading its version even when one is known. */
-async function readVersion(nexus: Nexus, needed: readonly number[], doing: string, signal?: AbortSignal): Promise<number[]> {
-	const wanted = needed.join(".");
-	const printed = await nexus.version(signal);
-	const version = parseVersion(printed);
-	if (version === null) throw new NexusError("invalid", `${nexus.bin} --version printed no version (${JSON.stringify(printed.trim().slice(0, 80))}): ${doing} needs Nexus CLI ${wanted} or later`);
-	if (isOlder(version, needed)) throw new NexusError("invalid", `${nexus.bin} is ${version.join(".")}: ${doing} needs Nexus CLI ${wanted} or later (nexus --version)`);
-	knownVersions(nexus).set(wanted, version);
-	return version;
-}
+const versionsMet = new WeakMap<Nexus, Set<string>>();
 
 /**
  * Fails unless the CLI is `needed` or later, saying which version `doing` needs. A version that cannot be read
  * fails too, since an older CLI could do the wrong thing.
  */
 async function requireVersion(nexus: Nexus, needed: readonly number[], doing: string, signal?: AbortSignal): Promise<void> {
-	if (!knownVersions(nexus).has(needed.join("."))) await readVersion(nexus, needed, doing, signal);
+	const wanted = needed.join(".");
+	const met = versionsMet.get(nexus) ?? new Set<string>();
+	versionsMet.set(nexus, met);
+	if (met.has(wanted)) return;
+	const printed = await nexus.version(signal);
+	const version = parseVersion(printed);
+	if (version === null) throw new NexusError("invalid", `${nexus.bin} --version printed no version (${JSON.stringify(printed.trim().slice(0, 80))}): ${doing} needs Nexus CLI ${wanted} or later`);
+	if (isOlder(version, needed)) throw new NexusError("invalid", `${nexus.bin} is ${version.join(".")}: ${doing} needs Nexus CLI ${wanted} or later (nexus --version)`);
+	met.add(wanted);
 }
 
 /**
