@@ -439,7 +439,7 @@ describe("console", () => {
 		n.normal("q");
 		await done;
 		await n.until(() => n.statuses.at(-1) === "nexus 2 working · 1 needs you", "the summary without new");
-		expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--", idB]]);
+		expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--last-reply-at=2000", "--", idB]]);
 	});
 
 	test("a reply is not marked seen while a turn runs or another view is open", async () => {
@@ -464,20 +464,18 @@ describe("console", () => {
 		await shut;
 	});
 
-	for (const version of ["0.17.0", "0.19.0"]) {
-		test(`a thread whose reply was seen, here or in another client, is not marked again, with CLI ${version}`, async () => {
-			const n = load({ ...scenario, watch: answered, version, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
-			const done = n.run(`open ${idA}`);
-			await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
-			await new Promise((resolve) => setTimeout(resolve, 300));
-			n.normal("q");
-			await done;
-			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
-		});
-	}
+	test("a thread whose reply was seen, here or in another client, is not marked again", async () => {
+		const n = load({ ...scenario, watch: answered, responses: { ...scenario.responses, show: { ...detail, seenAt: 2_000, lastReplyAt: 2_000 } } });
+		const done = n.run(`open ${idA}`);
+		await n.until(() => n.shown.length === 1 && n.text().includes("Fix the probe retry"), "the details");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		n.normal("q");
+		await done;
+		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
+	});
 
-	test("a CLI older than 0.10.0 cannot mark a reply seen, which one warning says", async () => {
-		const n = load({ ...scenario, watch: answered, version: "0.9.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
+	test("a CLI older than 0.19.0 cannot mark a reply seen, which one warning says", async () => {
+		const n = load({ ...scenario, watch: answered, version: "0.18.0", responses: { ...scenario.responses, show: { ...detail, lastReplyAt: 2_000 } } });
 		const done = n.run(`open ${idA}`);
 		await n.until(() => n.notified.some(([, level]) => level === "warning"), "the warning");
 		n.normal("r");
@@ -486,7 +484,7 @@ describe("console", () => {
 		n.normal("q");
 		await done;
 		expect(n.notified.filter(([, level]) => level === "warning")).toEqual([
-			[`pi-nexus could not mark ${idA}'s reply seen, so it still shows as new in every client: ${n.bin} is 0.9.0: marking a reply seen needs Nexus CLI 0.10.0 or later (nexus --version)`, "warning"],
+			[`pi-nexus could not mark ${idA}'s reply seen, so it still shows as new in every client: ${n.bin} is 0.18.0: marking a reply seen needs Nexus CLI 0.19.0 or later (nexus --version)`, "warning"],
 		]);
 		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
 	});
@@ -633,7 +631,7 @@ describe("console", () => {
 			await done;
 		});
 
-		test("a reply is marked seen only once its transcript shows, and only while the details still name it", async () => {
+		test("a reply is marked seen only once its transcript shows", async () => {
 			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
 			const idle = claude({ ...claudeConversation, working: false });
 			const failing = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, fail: { conversation: { exit: 1, kind: "failed", error: "the pylon did not answer" } } });
@@ -653,22 +651,10 @@ describe("console", () => {
 			await done;
 		});
 
-		test("a newer reply than the transcript shown skips the mark", async () => {
+		test("the mark names the reply the transcript shows, not a newer one the details name, which stays unread", async () => {
 			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
 			const idle = claude({ ...claudeConversation, working: false });
 			const n = load({ ...idle, responses: { ...idle.responses, show: unread, seen: null }, after: { conversation: { show: { ...unread, lastReplyAt: 3_000 } } } });
-			const done = n.run(`open ${idA}`);
-			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first.") && n.calls().filter((c) => c[0] === "show").length >= 2, "the check before the mark");
-			await new Promise((resolve) => setTimeout(resolve, 300));
-			expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
-			n.normal("q");
-			await done;
-		});
-
-		test("with CLI 0.19.0 the mark names the reply shown, so a newer one stays unread", async () => {
-			const unread = { ...claudeDetail, lastReplyAt: 2_000, attention: "reply" };
-			const idle = claude({ ...claudeConversation, working: false });
-			const n = load({ ...idle, version: "0.19.0", responses: { ...idle.responses, show: unread, seen: null }, after: { conversation: { show: { ...unread, lastReplyAt: 3_000 } } } });
 			const done = n.run(`open ${idA}`);
 			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
 			expect(n.calls().filter((c) => c[0] === "seen")).toEqual([["seen", "--json", "--last-reply-at=2000", "--", idA]]);
@@ -696,7 +682,7 @@ describe("console", () => {
 			const n = load({ ...busy, responses: { ...busy.responses, show: unread, seen: null } });
 			const done = n.run(`open ${idA}`);
 			await n.until(() => n.calls().some((c) => c[0] === "seen"), "the mark");
-			expect(n.calls().find((c) => c[0] === "seen")).toEqual(["seen", "--json", "--", idA]);
+			expect(n.calls().find((c) => c[0] === "seen")).toEqual(["seen", "--json", "--last-reply-at=2000", "--", idA]);
 			n.normal("q");
 			await done;
 		});
