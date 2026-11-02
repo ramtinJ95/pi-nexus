@@ -5,7 +5,7 @@
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ClaudeConversation, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
-import { claudeUnwritten, contentText, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
+import { claudeUnwritten, contentText, isWorking, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
 
 /**
  * The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase, `reply` a reply the person
@@ -210,22 +210,6 @@ export function closedLabel(threads: readonly Thread[]): string {
 	return [archived > 0 && `${archived} archived`, deleted > 0 && `${deleted} deleted`].filter(Boolean).join(", ");
 }
 
-export interface Group {
-	project: string;
-	open: ThreadRow[];
-	closed: ThreadRow[];
-}
-
-/** Each project's threads, newest first, the open ones apart from the archived or deleted ones. */
-export function groups(threads: readonly ThreadRow[], projects: readonly Project[]): Group[] {
-	const names = [...new Set([...projects.map((p) => p.id), ...threads.map((t) => t.project)])];
-	const newest = [...threads].sort((a, b) => b.createdAt - a.createdAt);
-	return names.map((project) => {
-		const own = newest.filter((t) => t.project === project);
-		return { project, open: own.filter((t) => !isClosed(t)), closed: own.filter(isClosed) };
-	});
-}
-
 /** What an attention asks of the person: to act, as the dashboard's Needs you lists, or to read a new reply. */
 export type Asks = "act" | "read" | null;
 
@@ -279,47 +263,105 @@ export function summary(threads: readonly ThreadRow[], project: string | null = 
 	].join(" · ");
 }
 
-/** The strip's one notice: the most urgent of the threads that ask something of the person, its look, and how many do. */
+/**
+ * The strip's one notice: the most urgent of the threads that ask something of the person, its look, and how many
+ * threads ask to act and to read, as the status line counts them.
+ */
 export interface Notice {
 	top: ThreadRow;
 	look: Look;
-	count: number;
+	acts: number;
+	reads: number;
 }
 
 /** Null when no thread asks anything of the person, so threads that only work leave the strip empty. */
 export function stripNotice(threads: readonly ThreadRow[]): Notice | null {
 	const asking = threads.filter((t) => lookOf(t)?.asks).sort(urgency);
 	const top = asking[0];
-	return top === undefined ? null : { top, look: lookOf(top)!, count: asking.length };
+	if (top === undefined) return null;
+	const acts = asking.filter((t) => lookOf(t)!.asks === "act").length;
+	return { top, look: lookOf(top)!, acts, reads: asking.length - acts };
+}
+
+/** How long an open thread whose pylon is down and whose agent is not working stays listed before it folds away as quiet. */
+const quietAfterMs = 8 * 60 * 60 * 1000;
+/** When anything last happened in a thread, a reply included. */
+export const lastActive = (t: ThreadRow) => Math.max(lastActivityAt(t), t.lastReplyAt ?? 0);
+export const quietLabel = (threads: readonly Thread[]) => `${threads.length} quiet for over ${quietAfterMs / 3_600_000} hours`;
+
+/** A project's threads, newest first: the recent open ones, the open ones quiet for over `quietAfterMs`, and the archived or deleted ones. */
+export interface Group {
+	project: string;
+	recent: ThreadRow[];
+	quiet: ThreadRow[];
+	closed: ThreadRow[];
+}
+
+/**
+ * What the thread list shows, as the dashboard's home splits Needs you from the rest: the open threads that need you
+ * to act, most urgent first, then each project's other threads. A thread is quiet once its pylon is paused or absent,
+ * its agent is not working, and nothing has happened in it for over 8 hours. An unread reply does not keep a thread
+ * out of the quiet fold, since the strip and the status line count it.
+ */
+export function overview(threads: readonly ThreadRow[], projects: readonly Project[], now: number): { needs: ThreadRow[]; groups: Group[] } {
+	const names = [...new Set([...projects.map((p) => p.id), ...threads.map((t) => t.project)])];
+	const needs = threads.filter((t) => lookOf(t)?.asks === "act").sort(urgency);
+	const newest = threads.filter((t) => !needs.includes(t)).sort((a, b) => b.createdAt - a.createdAt);
+	const quiet = (t: ThreadRow) => (t.pylon.actualState === "paused" || t.pylon.actualState === "absent") && !isWorking(t) && now - lastActive(t) > quietAfterMs;
+	return {
+		needs,
+		groups: names.map((project) => {
+			const own = newest.filter((t) => t.project === project);
+			const open = own.filter((t) => !isClosed(t));
+			return { project, recent: open.filter((t) => !quiet(t)), quiet: open.filter(quiet), closed: own.filter(isClosed) };
+		}),
+	};
 }
 
 export type PickerRow =
 	| { kind: "new" }
-	| { kind: "project"; project: string; count: number }
-	| { kind: "thread"; thread: ThreadRow }
-	| { kind: "fold"; project: string; label: string; open: boolean };
+	| { kind: "needs"; count: number }
+	| { kind: "project"; project: string }
+	/** `needs` is a row of the Needs you list, which names the thread's project. */
+	| { kind: "thread"; thread: ThreadRow; needs: boolean }
+	| { kind: "fold"; project: string; fold: "quiet" | "closed"; label: string; open: boolean };
+
+/** The key `unfolded` holds for an open fold. */
+export const foldKey = (row: Extract<PickerRow, { kind: "fold" }>) => `${row.fold}:${row.project}`;
 
 /**
- * The picker's rows. A project's closed threads fold under one row, which `unfolded` opens. A filter matches a
- * thread's title or ID, hides the projects with no match and opens a fold that holds one.
+ * The picker's rows. A project's quiet threads and its closed threads each fold under one row, which `unfolded` opens.
+ * A filter matches a thread's title or ID, hides the projects with no match and opens a fold that holds one.
  */
-export function pickerRows(all: readonly Group[], unfolded: ReadonlySet<string>, query: string): PickerRow[] {
+export function pickerRows(shown: ReturnType<typeof overview>, unfolded: ReadonlySet<string>, query: string): PickerRow[] {
 	const q = query.trim().toLowerCase();
 	const match = (t: Thread) => q === "" || t.title.toLowerCase().includes(q) || t.id.includes(q);
 	const rows: PickerRow[] = q === "" ? [{ kind: "new" }] : [];
-	for (const g of all) {
-		const open = g.open.filter(match);
-		const closed = g.closed.filter(match);
-		if (q !== "" && open.length === 0 && closed.length === 0) continue;
-		rows.push({ kind: "project", project: g.project, count: g.open.length });
-		rows.push(...open.map((thread) => ({ kind: "thread" as const, thread })));
-		if (closed.length === 0) continue;
-		const opened = q !== "" || unfolded.has(g.project);
-		rows.push({ kind: "fold", project: g.project, label: closedLabel(closed), open: opened });
-		if (opened) rows.push(...closed.map((thread) => ({ kind: "thread" as const, thread })));
+	const needs = shown.needs.filter(match);
+	if (needs.length > 0) rows.push({ kind: "needs", count: needs.length }, ...needs.map((thread) => ({ kind: "thread" as const, thread, needs: true })));
+	for (const g of shown.groups) {
+		const recent = g.recent.filter(match);
+		const folds = [
+			{ fold: "quiet" as const, threads: g.quiet.filter(match), label: quietLabel },
+			{ fold: "closed" as const, threads: g.closed.filter(match), label: closedLabel },
+		].filter((f) => f.threads.length > 0);
+		if (q !== "" && recent.length === 0 && folds.length === 0) continue;
+		rows.push({ kind: "project", project: g.project });
+		rows.push(...recent.map((thread) => ({ kind: "thread" as const, thread, needs: false })));
+		for (const f of folds) {
+			const fold = { kind: "fold" as const, project: g.project, fold: f.fold, label: f.label(f.threads), open: false };
+			fold.open = q !== "" || unfolded.has(foldKey(fold));
+			rows.push(fold);
+			if (fold.open) rows.push(...f.threads.map((thread) => ({ kind: "thread" as const, thread, needs: false })));
+		}
 	}
 	return rows;
 }
+
+/** Where a pylon's phase stands against what is wanted of it, for the list's "wants paused". */
+const phaseWanted: Readonly<Record<string, DesiredPhase>> = { running: "running", spawning: "running", paused: "paused", pausing: "paused", deleting: "deleted", absent: "deleted" };
+/** What the planner wants of the pylon, while the pylon is not there yet. */
+export const wanting = (desired: DesiredPhase, actual: string) => (phaseWanted[actual] === desired ? null : desired);
 
 /**
  * A tool result made for display rather than received: a running call's output so far, or the failure an aborted or

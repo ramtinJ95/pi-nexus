@@ -397,7 +397,7 @@ describe("console", () => {
 		n.press("h");
 		await n.until(() => n.shown.length === 2 && n.text().includes(threads[1]!.title), "the picker");
 		expect(n.shown[1]!.options).toBeUndefined();
-		expect(n.text()).toContain(`→ ● ${threads[0]!.title}`);
+		expect(n.text()).toContain(`→ ◉ ${threads[0]!.title}`);
 		expect(n.calls()).toContainEqual(["threads", "--json", "--all"]);
 		expect(n.calls()).toContainEqual(["projects", "--json"]);
 		n.press("q");
@@ -501,7 +501,7 @@ describe("console", () => {
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
 		expect(key).toBe("nexus-strip");
-		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ 2 threads need you");
+		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ 1 thread needs you · 1 new");
 		await n.run("strip off");
 		// Off stops the polling, so the strip and the summary it keeps go together.
 		expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
@@ -586,13 +586,13 @@ describe("console", () => {
 		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
 		n.press("i", ..."half-written draft", "\x1b");
 		n.press("t");
-		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker");
 		// Esc leaves the picker without choosing, back to the thread.
 		n.press("\x1b");
 		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
 		expect(n.text()).toContain("half-written draft");
 		n.press("t");
-		await n.until(() => n.shown.length === 4 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker again");
+		await n.until(() => n.shown.length === 4 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker again");
 		n.press("j", "\r");
 		await n.until(() => n.shown.length === 5 && n.text().includes(`(${idB})`), "the second thread");
 		expect(n.text()).not.toContain("half-written draft");
@@ -743,7 +743,7 @@ describe("console", () => {
 		n.type("ship it");
 		await n.until(() => n.text().includes("The message was not sent"), "the failed send");
 		n.press("\x1b", "t");
-		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker");
 		n.press("\x1b");
 		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
 		expect(n.text()).toContain("ship it");

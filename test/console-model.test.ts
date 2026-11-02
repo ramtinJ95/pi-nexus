@@ -12,9 +12,7 @@ import {
 	composerOf,
 	conversationItems,
 	exitCode,
-	groups,
 	modelOf,
-	pickerRows,
 	previewLook,
 	runOf,
 	shellQuote,
@@ -63,16 +61,16 @@ describe("the status line and the strip", () => {
 
 	test("a Claude worker stopped on its usage limit needs you, as a failed pylon does", () => {
 		expect(summary([limited, reply])).toBe("nexus 0 working · 1 needs you · 1 new");
-		expect(strip([reply, limited])).toBe("nexus  ◷ 2 threads need you");
+		expect(strip([reply, limited])).toBe("nexus  ◷ 1 thread needs you · 1 new");
 		expect(strip([limited])).toBe("nexus  ◷ Out of tokens  usage limit");
 	});
 
-	test("the strip is one notice, in the look of the most urgent thread, and counts every thread that asks for you", () => {
+	test("the strip is one notice, in the look of the most urgent thread, and counts the threads that ask for you as the status line does", () => {
 		const unknown = row("th-0000000000cc", { attention: "stalled" });
-		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 3 threads need you");
+		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 2 threads need you · 1 new");
 		expect(strip([claude, reply])).toBe("nexus  ● Answered  new reply");
 		expect(strip([claude, waiting])).toBe("nexus  ◇ Waiting  waiting for input");
-		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! 2 threads need you");
+		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! 1 thread needs you · 1 new");
 	});
 
 	test("threads that only work, or ask nothing this table knows, leave the strip empty", () => {
@@ -84,7 +82,10 @@ describe("the status line and the strip", () => {
 		expect(strip([long], 200, "spoon")).toBe("nexus · spoon  ● A very long thread title that goes on  new reply");
 		expect(strip([long], 40, "spoon")).toBe("nexus · spoon  ● A very long…  new reply");
 		expect(strip([long], 32, "spoon")).toBe("nexus  ● A very long…  new reply");
-		expect(strip([failed, reply, waiting], 24)).toBe("nexus  ✕ 3 need you");
+		expect(strip([failed, reply, waiting], 40)).toBe("nexus  ✕ 2 threads need you · 1 new");
+		expect(strip([failed, reply, waiting], 30)).toBe("nexus  ✕ 2 need you · 1 new");
+		expect(strip([failed, reply, waiting], 24)).toBe("nexus  ✕ 2 need you");
+		expect(strip([reply, { ...reply, id: idC }])).toBe("nexus  ● 2 new replies");
 		for (let width = 16; width <= 80; width++) {
 			for (const threads of [[long], [failed, reply, waiting]]) {
 				const line = new Strip(piTheme(), { kind: "notice", notice: stripNotice(threads)! }, "spoon").render(width);
@@ -142,32 +143,6 @@ describe("thread state", () => {
 		expect(ago(asked, asked + 5 * 60_000)).toBe("5 min ago");
 		expect(clock(72_000)).toBe("1m 12s");
 		expect(clock(3_725_000)).toBe("1h 2m");
-	});
-});
-
-describe("picker rows", () => {
-	const all = [
-		row(idA, { project: "nexus", title: "Old", createdAt: 1 }),
-		row(idB, { project: "nexus", title: "New", createdAt: 2 }),
-		row(idC, { project: "nexus", title: "Gone", status: "archived" }),
-		row("th-ffff00002222", { project: "nexus", title: "Removed", status: "deleted" }),
-		row("th-ffff00003333", { project: "loose", title: "Elsewhere" }),
-	];
-	const labels = (rows: ReturnType<typeof pickerRows>) =>
-		rows.map((r) => (r.kind === "thread" ? r.thread.title : r.kind === "fold" ? `${r.open ? "v" : ">"} ${r.label}` : r.kind === "project" ? `# ${r.project} ${r.count}` : "+"));
-
-	test("groups by project, open threads newest first, closed ones folded", () => {
-		const rows = pickerRows(groups(all, [project]), new Set(), "");
-		expect(labels(rows)).toEqual(["+", "# nexus 2", "New", "Old", "> 1 archived, 1 deleted", "# loose 1", "Elsewhere"]);
-	});
-
-	test("an unfolded project shows its closed threads", () => {
-		expect(labels(pickerRows(groups(all, [project]), new Set(["nexus"]), "")).slice(4, 7)).toEqual(["v 1 archived, 1 deleted", "Gone", "Removed"]);
-	});
-
-	test("a filter matches titles and IDs, opens folds it matches and hides empty projects", () => {
-		expect(labels(pickerRows(groups(all, [project]), new Set(), "gone"))).toEqual(["# nexus 2", "v 1 archived", "Gone"]);
-		expect(labels(pickerRows(groups(all, [project]), new Set(), "3333"))).toEqual(["# loose 1", "Elsewhere"]);
 	});
 });
 

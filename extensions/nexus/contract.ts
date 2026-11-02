@@ -49,6 +49,8 @@ const threadFields = {
 	conversationId: Nullable(Type.String()),
 	/** Whether a session in the pylon, a Claude worker's included, runs a turn. Absent from a control plane that reports none. */
 	sessionTurnRunning: Type.Optional(Type.Boolean()),
+	/** The earliest known start of the running turns, absent while none runs or none was recorded starting. */
+	workingSince: Type.Optional(Type.Number()),
 };
 
 /**

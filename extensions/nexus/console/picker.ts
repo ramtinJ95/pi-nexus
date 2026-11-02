@@ -1,8 +1,11 @@
 /**
- * The thread picker, in pi's selector look: threads grouped by project, open ones first, the archived and deleted
- * ones folded, with the dashboard's overview columns. It shows the project chosen with p, or every project. Its markers
- * are the control plane's attention, which every client shares: a thread whose pylon failed, whose tasks are parked or
- * whose session waits for input says it needs you, and one with a reply nobody has marked seen says it is new.
+ * The thread picker, in pi's selector look, after the dashboard's home: what needs you to act first, under Needs you,
+ * then each project's threads, newest first, the ones quiet for over 8 hours and the archived or deleted ones folded.
+ * Colour and words show only where the control plane's attention, which every client shares, asks something of the
+ * person: a row that needs you, or has a reply nobody has marked seen, is bright, with its dot in the attention's
+ * colour and its word beside its age. Every other row is dim, its dot's shape its state, as the dashboard dims it.
+ * The selected row says where its pylon is, when you and the agent were last active, and its ID. It shows the project
+ * chosen with p, or every project.
  *
  * Its keys are vim's, as the thread view's are: j and k move, / filters as pi's session picker does when you type,
  * and Enter accepts the filter.
@@ -11,9 +14,9 @@ import { DynamicBorder, rawKeyHint, type Theme } from "@earendil-works/pi-coding
 import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import type { Project, ThreadRow } from "../contract.ts";
 import { inScope, scopeLabel } from "../scope.ts";
-import { isWorking, lastActivityAt } from "../thread.ts";
-import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
-import { ago, badge, groups, lookOf, pickerRows, span, threadState, toneColor, type Group, type PickerRow, type Tone } from "./model.ts";
+import { isWorking } from "../thread.ts";
+import { helpLines, hint, KeyReader, modeLine, type Binding } from "./keys.ts";
+import { badge, foldKey, lastActive, lookOf, overview, pickerRows, span, threadState, toneColor, toneGlyph, wanting, type PickerRow } from "./model.ts";
 
 /** `back` returns to where the picker was opened from; `projects` chooses the project shown; `close` leaves the console. */
 export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "projects" } | { kind: "back" } | { kind: "close" };
@@ -44,7 +47,7 @@ const pickerKeys: readonly Binding<Command>[] = [
 export class Picker implements Component, Focusable {
 	private readonly search = new Input();
 	private readonly keys = new KeyReader(pickerKeys);
-	private groups: Group[] = [];
+	private shown: ReturnType<typeof overview> = { needs: [], groups: [] };
 	private readonly unfolded = new Set<string>();
 	private rows: PickerRow[] = [];
 	private selected = 0;
@@ -83,7 +86,7 @@ export class Picker implements Component, Focusable {
 		this.at = undefined;
 		this.scope = scope;
 		this.projects = projects;
-		this.groups = groups(inScope(threads, scope), scope === null ? projects : projects.filter((p) => p.id === scope));
+		this.shown = overview(inScope(threads, scope), scope === null ? projects : projects.filter((p) => p.id === scope), this.now());
 		this.error = undefined;
 		this.layout();
 		// The same thread stays selected across a refresh.
@@ -100,7 +103,7 @@ export class Picker implements Component, Focusable {
 	}
 
 	private layout(): void {
-		this.rows = pickerRows(this.groups, this.unfolded, this.search.getValue());
+		this.rows = pickerRows(this.shown, this.unfolded, this.search.getValue());
 		if (!this.rows[this.selected] || !selectable(this.rows[this.selected]!)) this.selected = this.rows.findIndex(selectable);
 	}
 
@@ -170,8 +173,8 @@ export class Picker implements Component, Focusable {
 				if (row?.kind === "thread") return this.done({ kind: "open", thread: row.thread.id });
 				if (row?.kind === "new") return this.done({ kind: "new" });
 				if (row?.kind === "fold") {
-					if (this.unfolded.has(row.project)) this.unfolded.delete(row.project);
-					else this.unfolded.add(row.project);
+					if (this.unfolded.has(foldKey(row))) this.unfolded.delete(foldKey(row));
+					else this.unfolded.add(foldKey(row));
 					this.layout();
 				}
 				break;
@@ -205,72 +208,63 @@ export class Picker implements Component, Focusable {
 		return row?.kind === "thread" ? row.thread.project : row?.kind === "fold" ? row.project : undefined;
 	}
 
-	/** A thread's overview columns, fullest first: state, wanted, observed, node, human, agent, last active. */
-	private cells(th: ThreadRow): { level: string[][]; tone: Tone } {
-		const [label, tone] = threadState(th, th.pylon.actualState, isWorking(th));
-		const desired = `wanted ${th.desired}`;
-		const pylon = [badge(th.pylon.actualState)[0], th.pylon.node];
-		const human = `human ${ago(th.lastHumanActivityAt, this.now())}`;
-		const agent = `agent ${isWorking(th) ? "turn running" : ago(th.lastAgentActivityAt, this.now())}`;
-		const at = span(lastActivityAt(th), this.now()) ?? "now";
-		return { tone, level: [[label, desired, ...pylon, human, agent, at], [label, desired, ...pylon, at], [label, at]] };
-	}
-
-	/** What a thread wants of the person, after its title. */
-	private marker(th: ThreadRow): string {
-		const asks = lookOf(th)?.asks;
-		return asks === "act" ? ` ${this.theme.fg("warning", "needs you")}` : asks === "read" ? ` ${this.theme.fg("accent", "new")}` : "";
+	/** A thread's row: its dot, its title, and on the right its age, after what it asks of the person when it asks anything. */
+	private threadLine(th: ThreadRow, selected: boolean, needs: boolean, width: number): string {
+		const t = this.theme;
+		const look = lookOf(th);
+		const asking = look?.asks ? look : null;
+		const [, tone] = threadState(th, th.pylon.actualState, isWorking(th));
+		const since = th.workingSince === undefined ? null : span(th.workingSince, this.now());
+		const age = isWorking(th) && !asking ? ["working", since].filter(Boolean).join(" ") : (span(lastActive(th), this.now()) ?? "now");
+		const right = `${asking ? `${t.fg(toneColor[asking.tone], asking.word)}  ` : ""}${t.fg("dim", age.padStart(6))}`;
+		const dot = asking ? t.fg(toneColor[asking.tone], asking.glyph) : t.fg("dim", toneGlyph[tone]);
+		const project = needs ? t.fg("dim", `${th.project} / `) : "";
+		const title = selected ? t.fg("accent", th.title) : asking ? th.title : t.fg("muted", th.title);
+		const left = truncateToWidth(` ${selected ? t.fg("accent", "→ ") : "  "}${dot} ${project}${title}`, Math.max(10, width - visibleWidth(right) - 2));
+		return `${left}${" ".repeat(Math.max(2, width - visibleWidth(left) - visibleWidth(right)))}${right}`;
 	}
 
 	/**
-	 * The thread rows as a table. Every row shows the same columns, dropped from the right while the longest title,
-	 * up to 40 columns, would not fit beside them.
+	 * Under the selected thread: where its pylon is, and what is wanted of it while it is not there yet, when you and the
+	 * agent were last active, and its ID.
 	 */
-	private table(width: number): Map<ThreadRow, string> {
-		const t = this.theme;
-		const threads = this.rows.flatMap((r) => (r.kind === "thread" ? [r.thread] : []));
-		const cells = threads.map((th) => this.cells(th));
-		const title = Math.min(40, Math.max(0, ...threads.map((th) => visibleWidth(th.title))));
-		const widthsAt = (level: number) =>
-			cells[0]?.level[level]!.map((_, i) => Math.max(...cells.map((c) => visibleWidth(c.level[level]![i]!)))) ?? [];
-		const used = (level: number) => widthsAt(level).reduce((sum, w) => sum + (w === 0 ? 0 : w + 2), 0);
-		const level = [0, 1, 2].find((l) => width - used(l) >= title + 16) ?? 2;
-		const widths = widthsAt(level);
-		const out = new Map<ThreadRow, string>();
-		threads.forEach((th, i) => {
-			const selected = this.rows[this.selected]?.kind === "thread" && (this.rows[this.selected] as { thread: ThreadRow }).thread === th;
-			// Keep every row the same width; only the final activity age is right-aligned within its column.
-			const right = cells[i]!.level[level]!.flatMap((cell, c) => (widths[c] === 0 ? [] : [c === widths.length - 1 ? cell.padStart(widths[c]!) : cell.padEnd(widths[c]!)])).join("  ");
-			const prefix = selected ? t.fg("accent", "→ ") : "  ";
-			const left = ` ${prefix}${t.fg(toneColor[cells[i]!.tone], "●")} ${selected ? t.fg("accent", th.title) : th.title}${this.marker(th)}`;
-			const shownLeft = truncateToWidth(left, Math.max(10, width - visibleWidth(right) - 2));
-			out.set(th, `${shownLeft}${" ".repeat(Math.max(2, width - visibleWidth(shownLeft) - visibleWidth(right)))}${t.fg("dim", right)}`);
-		});
-		return out;
+	private detailLine(th: ThreadRow): string {
+		const wants = wanting(th.desired, th.pylon.actualState);
+		const when = (at: number) => (at === 0 ? "never" : (span(at, this.now()) ?? "now"));
+		const facts = [
+			`${badge(th.pylon.actualState)[0]} on ${th.pylon.node}`,
+			...(wants === null ? [] : [`wants ${wants}`]),
+			`you ${when(th.lastHumanActivityAt)}`,
+			`agent ${isWorking(th) ? "working" : when(th.lastAgentActivityAt)}`,
+			th.id,
+		];
+		return `     ${this.theme.fg("dim", facts.join(" · "))}`;
 	}
 
-	private rowLine(row: PickerRow, selected: boolean, table: Map<ThreadRow, string>): string {
+	private rowLine(row: PickerRow, selected: boolean, width: number): string {
 		const t = this.theme;
 		const prefix = selected ? t.fg("accent", "→ ") : "  ";
 		switch (row.kind) {
 			case "new":
 				return ` ${prefix}${t.fg(selected ? "accent" : "muted", "+ New thread")}`;
+			case "needs":
+				return ` ${t.fg("accent", t.bold("Needs you"))}${t.fg("dim", ` ${row.count}`)}`;
 			case "project":
 				return ` ▾ ${t.fg("accent", t.bold(row.project))}${t.fg("dim", `  ${this.projects.find((p) => p.id === row.project)?.defaultBranch ?? ""}`)}`;
 			case "fold":
 				return ` ${prefix}${t.fg("muted", `${row.open ? "▾" : "▸"} ${row.label}`)}`;
 			case "thread":
-				return table.get(row.thread)!;
+				return this.threadLine(row.thread, selected, row.needs, width);
 		}
 	}
 
-	private hints(): string {
+	private hints(width: number): string {
 		const k = (command: Command, description: string) => hint(pickerKeys, command, description);
 		const t = this.theme;
 		const mode = t.bold(this.filtering ? t.fg("warning", "FILTER") : t.fg("accent", "NORMAL"));
-		if (this.help) return `${mode}  ${rawKeyHint("any key", "closes the help")}`;
-		if (this.filtering) return [mode, rawKeyHint("type", "filter"), rawKeyHint("↑↓", "navigate"), rawKeyHint("enter", "keep the filter"), rawKeyHint("esc", "clear it")].join("  ");
-		return [mode, rawKeyHint("j/k", "navigate"), k("open", "open or unfold"), k("new", "new thread"), k("projects", "project"), k("filter", "filter"), k("help", "keys"), k("close", "close")].join("  ");
+		if (this.help) return modeLine(mode, [rawKeyHint("any key", "closes the help")], width);
+		if (this.filtering) return modeLine(mode, [rawKeyHint("type", "filter"), rawKeyHint("↑↓", "navigate"), rawKeyHint("enter", "keep the filter"), rawKeyHint("esc", "clear it")], width);
+		return modeLine(mode, [rawKeyHint("j/k", "navigate"), k("open", "open or unfold"), k("new", "new thread"), k("projects", "project"), k("filter", "filter"), k("close", "close"), k("help", "keys")], width);
 	}
 
 	render(width: number): string[] {
@@ -287,11 +281,14 @@ export class Picker implements Component, Focusable {
 		} else {
 			if (this.rows.length === 0) lines.push(` ${t.fg("muted", "No thread matches.")}`);
 			const start = Math.max(0, Math.min(this.selected - Math.floor(visibleRows / 2), this.rows.length - visibleRows));
-			const table = this.table(width);
-			for (const [i, row] of this.rows.slice(start, start + visibleRows).entries()) lines.push(this.rowLine(row, start + i === this.selected, table));
+			for (const [i, row] of this.rows.slice(start, start + visibleRows).entries()) {
+				const selected = start + i === this.selected;
+				lines.push(this.rowLine(row, selected, width));
+				if (selected && row.kind === "thread") lines.push(this.detailLine(row.thread));
+			}
 			if (this.rows.length > visibleRows) lines.push(` ${t.fg("dim", `(${this.selected + 1}/${this.rows.length})`)}`);
 		}
-		lines.push("", ` ${this.hints()}`, "", ...border.render(width));
+		lines.push("", ` ${this.hints(width - 1)}`, "", ...border.render(width));
 		return lines.map((line) => truncateToWidth(line, width));
 	}
 
