@@ -13,7 +13,7 @@ import type { Project, ThreadRow } from "../contract.ts";
 import { inScope, scopeLabel } from "../scope.ts";
 import { isWorking, lastActivityAt } from "../thread.ts";
 import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
-import { ago, badge, groups, markOf, pickerRows, span, threadState, toneColor, type Group, type PickerRow, type Tone } from "./model.ts";
+import { ago, badge, groups, lookOf, pickerRows, span, threadState, toneColor, type Group, type PickerRow, type Tone } from "./model.ts";
 
 /** `back` returns to where the picker was opened from; `projects` chooses the project shown; `close` leaves the console. */
 export type PickerEnd = { kind: "open"; thread: string } | { kind: "new"; project?: string } | { kind: "projects" } | { kind: "back" } | { kind: "close" };
@@ -218,8 +218,8 @@ export class Picker implements Component, Focusable {
 
 	/** What a thread wants of the person, after its title. */
 	private marker(th: ThreadRow): string {
-		const mark = markOf(th);
-		return mark === "needs-you" ? ` ${this.theme.fg("warning", "needs you")}` : mark === "new" ? ` ${this.theme.fg("accent", "new")}` : "";
+		const asks = lookOf(th)?.asks;
+		return asks === "act" ? ` ${this.theme.fg("warning", "needs you")}` : asks === "read" ? ` ${this.theme.fg("accent", "new")}` : "";
 	}
 
 	/**

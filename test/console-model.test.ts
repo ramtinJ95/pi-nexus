@@ -8,7 +8,6 @@ import {
 	argumentsDiff,
 	attachCommand,
 	blocks,
-	chips,
 	clock,
 	composerOf,
 	conversationItems,
@@ -20,6 +19,7 @@ import {
 	runOf,
 	shellQuote,
 	shownResult,
+	stripNotice,
 	startArgs,
 	startHint,
 	stepsSummary,
@@ -31,51 +31,67 @@ import {
 	type Item,
 	type ToolItem,
 } from "../extensions/nexus/console/model.ts";
-import type { Session } from "../extensions/nexus/contract.ts";
+import type { Session, ThreadRow } from "../extensions/nexus/contract.ts";
 import type { RenderedEntry } from "../extensions/nexus/contract.ts";
 import { parseConversation } from "../extensions/nexus/contract.ts";
 import { contentText, reduce } from "../extensions/nexus/thread.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
-import { asked, detail, editDetails, entries, live, memorySettings, runningCall, working } from "./console-fixture.ts";
+import { asked, detail, editDetails, entries, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { Strip } from "../extensions/nexus/console/strip.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { idA, idB, idC, idle, row, thread } from "./fixtures.ts";
 
 const project = { id: "nexus", repoUrl: "git@example.com:nexus", defaultNode: "firebat", defaultBranch: "main" };
 const tools = (items: Item[]) => items.filter((i): i is ToolItem => i.kind === "tool");
 
-describe("markers", () => {
+describe("the status line and the strip", () => {
 	const failed = row(idA, { title: "Broken", attention: "failed", lastAgentActivityAt: 1 });
 	const reply = row(idB, { title: "Answered", attention: "reply", lastReplyAt: 5, lastAgentActivityAt: 5 });
 	const claude = row(idC, { title: "Claude at work", attention: "working", lastAgentActivityAt: 9 });
 	const waiting = row("th-0000000000aa", { title: "Waiting", attention: "waiting", lastAgentActivityAt: 3 });
 	const archived = row("th-0000000000bb", { title: "Archived", attention: "reply", status: "archived" });
+	const limited = row("th-0000000000ee", { title: "Out of tokens", attention: "limited", lastAgentActivityAt: 2 });
+	const strip = (threads: ThreadRow[], width = 200, project: string | null = null) => {
+		const notice = stripNotice(threads);
+		return notice === null ? null : plain(new Strip(piTheme(), { kind: "notice", notice }, project).render(width));
+	};
 
 	test("the status line counts the control plane's attention, and a Claude worker's turn as working", () => {
 		expect(summary([failed, reply, claude, waiting, archived])).toBe("nexus 1 working · 2 needs you · 1 new");
 		expect(summary([row(idA, { agentTurnRunning: true })], "spoon")).toBe("nexus spoon · 1 working");
 	});
 
-	test("the strip lists what needs you, then new replies, then work, an unknown attention not at all", () => {
+	test("a Claude worker stopped on its usage limit needs you, as a failed pylon does", () => {
+		expect(summary([limited, reply])).toBe("nexus 0 working · 1 needs you · 1 new");
+		expect(strip([reply, limited])).toBe("nexus  ◷ 2 threads need you");
+		expect(strip([limited])).toBe("nexus  ◷ Out of tokens  usage limit");
+	});
+
+	test("the strip is one notice, in the look of the most urgent thread, and counts every thread that asks for you", () => {
 		const unknown = row("th-0000000000cc", { attention: "stalled" });
-		expect(chips([claude, reply, archived, failed, unknown, waiting]).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Waiting", "needs-you"],
-			["Broken", "needs-you"],
-			["Answered", "new"],
-			["Claude at work", "working"],
-		]);
+		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 3 threads need you");
+		expect(strip([claude, reply])).toBe("nexus  ● Answered  new reply");
+		expect(strip([claude, waiting])).toBe("nexus  ◇ Waiting  waiting for input");
+		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! 2 threads need you");
 	});
 
-	test("a review that left a decision to the person needs them, ahead of new replies", () => {
-		const decide = row("th-0000000000dd", { title: "Decide", attention: "decision" });
-		expect(summary([reply, decide])).toBe("nexus 0 working · 1 needs you · 1 new");
-		expect(chips([reply, decide]).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Decide", "needs-you"],
-			["Answered", "new"],
-		]);
+	test("threads that only work, or ask nothing this table knows, leave the strip empty", () => {
+		expect(strip([claude, archived, row("th-0000000000cc", { attention: "stalled" }), row("th-0000000000dd")])).toBeNull();
 	});
 
-	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
-		const busy = row(idB, { attention: "reply", lastReplyAt: 5, sessionTurnRunning: true });
-		expect(summary([busy])).toBe("nexus 1 working · 1 new");
+	test("the strip fits one row: the project's name goes before the title gets short, and the count shortens", () => {
+		const long = row(idA, { title: "A very long thread title that goes on", attention: "reply" });
+		expect(strip([long], 200, "spoon")).toBe("nexus · spoon  ● A very long thread title that goes on  new reply");
+		expect(strip([long], 40, "spoon")).toBe("nexus · spoon  ● A very long…  new reply");
+		expect(strip([long], 32, "spoon")).toBe("nexus  ● A very long…  new reply");
+		expect(strip([failed, reply, waiting], 24)).toBe("nexus  ✕ 3 need you");
+		for (let width = 16; width <= 80; width++) {
+			for (const threads of [[long], [failed, reply, waiting]]) {
+				const line = new Strip(piTheme(), { kind: "notice", notice: stripNotice(threads)! }, "spoon").render(width);
+				expect(line).toHaveLength(1);
+				expect(visibleWidth(line[0]!)).toBeLessThanOrEqual(width);
+			}
+		}
 	});
 
 	test("a reply is unread until someone marks it seen", () => {

@@ -489,7 +489,7 @@ describe("console", () => {
 		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
 	});
 
-	test("the strip above the editor lists the threads that need you, have news or work, and /nexus strip off hides it for later sessions too", async () => {
+	test("the strip above the editor is one notice for the threads that ask for you, never for work, and /nexus strip off hides it for later sessions too", async () => {
 		const list = [
 			{ ...threads[0]!, title: "Fix the probe retry", attention: "working", lastHumanActivityAt: Date.now() - 180_000 },
 			row(idB, { title: "Answered", attention: "reply", lastReplyAt: 1_000 }),
@@ -501,9 +501,7 @@ describe("console", () => {
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
 		expect(key).toBe("nexus-strip");
-		const line = plain(strip!(fakeTui(), piTheme()).render(200));
-		expect(line).toMatch(/^nexus ● Broken needs you {2}· {2}● Answered new reply {2}· {2}● Fix the probe retry working 3 min$/);
-		expect(plain(strip!(fakeTui(), piTheme()).render(50))).toMatch(/^nexus ● Broken needs you {2}\+2 more$/);
+		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ 2 threads need you");
 		await n.run("strip off");
 		// Off stops the polling, so the strip and the summary it keeps go together.
 		expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
@@ -528,7 +526,8 @@ describe("console", () => {
 		n.start();
 		await n.until(() => n.statuses.at(-1) === "nexus 1 working", "the summary");
 		expect(n.calls()).toEqual([["threads", "--json"]]);
-		expect(n.widgets.at(-1)?.[1]).toBeDefined();
+		// A thread that only works asks nothing of the person, so the strip stays empty.
+		expect(n.widgets).toEqual([["nexus-strip", undefined]]);
 		const off = load(scenario, { settings: memorySettings({ strip: false }) });
 		off.start();
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -540,8 +539,19 @@ describe("console", () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } });
 		await n.run("list");
 		await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 needs you", "needs you");
-		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus ● Parked one needs you");
+		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ Parked one  parked");
 		expect(n.calls().some((c) => c[0] === "watch")).toBe(false);
+	});
+
+	test("until the threads are first read, the strip says why they cannot be, such as a control plane too old for the CLI", async () => {
+		const refusal = "the control plane at http://nexus.example:7777 runs Nexus 0.40.0, and this CLI needs 0.53.0 or later. Upgrade it, as deploy/README.md describes";
+		const n = load({ ...scenario, fail: { threads: { exit: 1, kind: "failed", error: refusal } } });
+		n.start();
+		await n.until(() => n.statuses.at(-1) === "nexus failed", "the status");
+		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(400))).toBe(`nexus  ${refusal}`);
+		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60));
+		expect(narrow).toStartWith("nexus  the control plane at");
+		expect(narrow.length).toBeLessThanOrEqual(60);
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
@@ -786,7 +796,7 @@ describe("console", () => {
 			expect(n.text()).not.toContain(threads[1]!.title);
 			expect(settings.writes).toEqual([{ project: "spoon" }]);
 			await n.until(() => n.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "the summary of spoon");
-			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus spoon · ● Spoon work new reply");
+			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus · spoon  ● Spoon work  new reply");
 			n.press("q");
 			await done;
 			const later = load(idleScenario, { settings });

@@ -7,16 +7,22 @@ import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ClaudeConversation, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
 import { claudeUnwritten, contentText, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
 
-/** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
-export type Tone = "ok" | "work" | "busy" | "idle" | "bad" | "muted";
+/**
+ * The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase, `reply` a reply the person
+ * has not read, which pi's themes draw violet, apart from running's green, as the dashboard does.
+ */
+export type Tone = "ok" | "work" | "reply" | "busy" | "idle" | "bad" | "muted";
 export const toneColor: Readonly<Record<Tone, ThemeColor>> = {
 	ok: "success",
 	work: "accent",
+	reply: "accent",
 	busy: "warning",
 	idle: "muted",
 	bad: "error",
 	muted: "dim",
 };
+/** A dot's shape by its tone, which still tells running from paused where the dot takes no colour. */
+export const toneGlyph: Readonly<Record<Tone, string>> = { ok: "●", work: "◉", reply: "●", busy: "◐", idle: "○", bad: "✕", muted: "◌" };
 
 const actualBadge: Readonly<Record<string, [label: string, tone: Tone]>> = {
 	running: ["running", "ok"],
@@ -220,19 +226,40 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 	});
 }
 
-/** What a thread's marker says: it needs the person, it has a reply they have not seen, or its agent works. */
-export type Mark = "needs-you" | "new" | "working";
+/** What an attention asks of the person: to act, as the dashboard's Needs you lists, or to read a new reply. */
+export type Asks = "act" | "read" | null;
+
+export interface Look {
+	word: string;
+	tone: Tone;
+	glyph: string;
+	asks: Asks;
+}
 
 /**
- * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, decide what a
- * review left to them, or answer a session waiting for input. An attention value this table does not know shows no
- * marker.
+ * How each attention the control plane reports shows, in its order, most urgent first, as the dashboard's one table
+ * (src/control/attention.ts) holds each one's label, tone and whether it needs the person. Only the person can retry
+ * a failed pylon or parked tasks, decide what a review or a question left to them, wait out or stop a usage limit,
+ * or answer a session waiting for input. A new reply asks to be read, and working asks nothing.
  */
-const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", decision: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
+export const looks = {
+	failed: { word: "failed", tone: "bad", glyph: "✕", asks: "act" },
+	decision: { word: "needs your decision", tone: "bad", glyph: "!", asks: "act" },
+	parked: { word: "parked", tone: "bad", glyph: "✕", asks: "act" },
+	limited: { word: "usage limit", tone: "bad", glyph: "◷", asks: "act" },
+	reply: { word: "new reply", tone: "reply", glyph: "●", asks: "read" },
+	working: { word: "working", tone: "work", glyph: "◉", asks: null },
+	waiting: { word: "waiting for input", tone: "idle", glyph: "◇", asks: "act" },
+} as const satisfies Record<string, Look>;
+type Attention = keyof typeof looks;
+const known = (attention: string | null): attention is Attention => attention !== null && Object.hasOwn(looks, attention);
 
-/** An archived or deleted thread wants nothing. */
-export const markOf = (t: ThreadRow): Mark | null =>
-	isClosed(t) || t.attention === null || !Object.hasOwn(marks, t.attention) ? null : marks[t.attention]!;
+/** How an open thread's attention shows. An archived or deleted thread, or an attention added after this table, shows none. */
+export const lookOf = (t: ThreadRow): Look | null => (isClosed(t) || !known(t.attention) ? null : looks[t.attention]);
+
+/** Most urgent first, by the control plane's order, and the newest first among equals. */
+const urgency = (a: ThreadRow, b: ThreadRow) =>
+	Object.keys(looks).indexOf(a.attention!) - Object.keys(looks).indexOf(b.attention!) || lastActivityAt(b) - lastActivityAt(a);
 
 /** Whether the latest reply came after anyone, in any client, last marked it seen. */
 export const unread = (t: Pick<ThreadRow, "seenAt" | "lastReplyAt">) => t.lastReplyAt !== null && (t.seenAt === null || t.lastReplyAt > t.seenAt);
@@ -242,9 +269,9 @@ export const unread = (t: Pick<ThreadRow, "seenAt" | "lastReplyAt">) => t.lastRe
  * `nexus spoon · 1 working` for one project. The counts other than working show when not zero.
  */
 export function summary(threads: readonly ThreadRow[], project: string | null = null): string {
-	const count = (mark: Mark) => threads.filter((t) => markOf(t) === mark).length;
-	const needs = count("needs-you");
-	const fresh = count("new");
+	const count = (asks: Asks) => threads.filter((t) => lookOf(t)?.asks === asks).length;
+	const needs = count("act");
+	const fresh = count("read");
 	return [
 		`nexus ${project === null ? "" : `${project} · `}${workingCount(threads)} working`,
 		...(needs > 0 ? [`${needs} needs you`] : []),
@@ -252,21 +279,18 @@ export function summary(threads: readonly ThreadRow[], project: string | null = 
 	].join(" · ");
 }
 
-/** A thread in the strip above pi's editor: one that needs you, has news, or works, in that order. */
-export interface Chip {
-	thread: ThreadRow;
-	kind: Mark;
+/** The strip's one notice: the most urgent of the threads that ask something of the person, its look, and how many do. */
+export interface Notice {
+	top: ThreadRow;
+	look: Look;
+	count: number;
 }
 
-const chipOrder: Readonly<Record<Mark, number>> = { "needs-you": 0, new: 1, working: 2 };
-
-export function chips(threads: readonly ThreadRow[]): Chip[] {
-	return threads
-		.flatMap((thread): Chip[] => {
-			const kind = markOf(thread);
-			return kind === null ? [] : [{ thread, kind }];
-		})
-		.sort((a, b) => chipOrder[a.kind] - chipOrder[b.kind] || lastActivityAt(b.thread) - lastActivityAt(a.thread));
+/** Null when no thread asks anything of the person, so threads that only work leave the strip empty. */
+export function stripNotice(threads: readonly ThreadRow[]): Notice | null {
+	const asking = threads.filter((t) => lookOf(t)?.asks).sort(urgency);
+	const top = asking[0];
+	return top === undefined ? null : { top, look: lookOf(top)!, count: asking.length };
 }
 
 export type PickerRow =

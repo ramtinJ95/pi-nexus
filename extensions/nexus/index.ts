@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readConversation, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
-import { attachCommand, attachHint, chips, pausedRefusal, sessionLook, sessionName, sessionPlace, summary } from "./console/model.ts";
+import { attachCommand, attachHint, pausedRefusal, sessionLook, sessionName, sessionPlace, stripNotice, summary } from "./console/model.ts";
 import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
@@ -41,6 +41,8 @@ class NexusSession {
 	private readonly follows = new Map<string, { stop: AbortController; view: ThreadView }>();
 	/** The threads last listed, for completion and titles. */
 	threads: ThreadRow[] = [];
+	/** Whether a poll has listed the threads, before which the strip says why they could not be. */
+	private listed = false;
 	/** Whether the status line's summary and the strip show, and so whether the session polls the threads. */
 	private strip: boolean;
 	private readonly console: Console;
@@ -106,21 +108,24 @@ class NexusSession {
 		try {
 			this.threads = await listThreads(this.nexus, [], signal);
 			if (polling === undefined || signal.aborted) return;
+			this.listed = true;
 			this.show();
 		} catch (err) {
-			if (polling !== undefined && !signal.aborted) this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
+			if (polling === undefined || signal.aborted) return;
+			this.ui?.setStatus("nexus", `nexus ${err instanceof NexusError ? err.kind : "failed"}`);
+			// A control plane too old for the CLI fails every read, so the person would otherwise never learn why.
+			if (!this.listed) this.ui?.setWidget("nexus-strip", (_tui, theme) => new Strip(theme, { kind: "failure", message: errorText(err) }, this.scope.project));
 		}
 	}
 
 	/** Shows the summary and the strip of the threads last listed in the project shown, while the session polls. */
 	private show(): void {
-		if (this.polling === undefined) return;
+		if (this.polling === undefined || !this.listed) return;
 		const project = this.scope.project;
 		const threads = inScope(this.threads, project);
 		this.ui?.setStatus("nexus", summary(threads, project));
-		const shown = chips(threads);
-		const now = Date.now();
-		this.ui?.setWidget("nexus-strip", shown.length > 0 ? (_tui, theme) => new Strip(theme, shown, now, project) : undefined);
+		const notice = stripNotice(threads);
+		this.ui?.setWidget("nexus-strip", notice === null ? undefined : (_tui, theme) => new Strip(theme, { kind: "notice", notice }, project));
 	}
 
 	private note(note: Note): void {
