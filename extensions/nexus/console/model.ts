@@ -647,6 +647,15 @@ export function modelOf(entries: readonly RenderedEntry[]): string | undefined {
 }
 
 /**
+ * What a thread's details leave to the person: each reason a review that ended for them gives, and each question that
+ * waits for their answer, by its first line. The CLI cannot answer a question, so each says where to.
+ */
+export const decisions = (detail: Pick<ThreadDetail, "review" | "questions">): string[] => [
+	...(detail.review?.phase.kind === "needs-person" ? (detail.review.phase.reasons ?? []) : []),
+	...(detail.questions ?? []).filter((q) => q.answer === null && q.answerer === "person").map((q) => `${q.text.split("\n")[0]} (answer it on the dashboard)`),
+];
+
+/**
  * The outputs worth listing. A preview output repeats a preview the thread lists, so it stays only for a preview the
  * thread no longer lists, which the dashboard keeps too.
  */

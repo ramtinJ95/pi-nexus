@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionUIContext } from "
 import { addProject, closeSession, createNexus, listProjects, listThreads, openSession, readConversation, readThread, sendText, showThread, startThread, threadId, unpreviewPort, type Nexus } from "./cli.ts";
 import { actions, complete, parseCommand, usage, type NexusCommand } from "./commands.ts";
 import { Console, userDisplay } from "./console/index.ts";
-import { attachCommand, attachHint, pausedRefusal, sessionLook, sessionName, sessionPlace, stripNotice, summary } from "./console/model.ts";
+import { attachCommand, attachHint, decisions, pausedRefusal, sessionLook, sessionName, sessionPlace, stripNotice, summary } from "./console/model.ts";
 import { Strip } from "./console/strip.ts";
 import type { Display } from "./console/transcript.ts";
 import { follow, type FollowEnd } from "./follow.ts";
@@ -221,8 +221,7 @@ class NexusSession {
 				const title = this.threads.find((t) => t.id === thread)?.title;
 				const heading = (line: string) => `${thread}${title ? ` ${title}` : ""}: ${line}`;
 				const detail = await showThread(nexus, thread, signal);
-				const phase = detail.review?.phase;
-				const decide = phase?.kind === "needs-person" ? (phase.reasons ?? []).map((reason) => `Needs you: ${reason}\n\n`).join("") : "";
+				const decide = decisions(detail).map((reason) => `Needs you: ${reason}\n\n`).join("");
 				if (detail.claudeWorker !== undefined) {
 					const [view, conversation] = await Promise.all([readThread(nexus, thread, signal), readConversation(nexus, thread, signal)]);
 					return this.note({ title: heading(stateLine({ ...view.state, run: conversation.working ? "working" : "idle" })), body: decide + claudeTranscript(conversation, 20_000) });

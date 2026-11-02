@@ -187,6 +187,11 @@ export const ThreadDetail = Type.Object({
 	agent: Nullable(Type.Object({ parkedTasks: Type.Number() })),
 	/** The thread's latest review as a builder, or null. Absent from a control plane older than CLI 0.18.0. */
 	review: Type.Optional(Nullable(Review)),
+	/**
+	 * Every question the thread asked, answered or not, a Claude worker's AskUserQuestion among them. Its `text` may
+	 * be several lines. Absent from a control plane older than CLI 0.35.0.
+	 */
+	questions: Type.Optional(Type.Array(Type.Object({ text: Type.String(), answerer: Type.String(), answer: Nullable(Type.Object({})) }))),
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 

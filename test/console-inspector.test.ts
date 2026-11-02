@@ -41,3 +41,14 @@ test("Pylon shows the thread's review, and each reason it left to the person", (
 	expect(text).toContain("Needs you: A Claude reviewer's approval never lands.");
 	expect(plain(detailLines(piTheme(), { ...detail, review: null }, [], detail, 0, 200))).not.toContain("Nexus review");
 });
+
+test("Pylon says to answer each question that waits for you on the dashboard, by its first line, and no other question", () => {
+	const question = (text: string, answerer: string, answer: { option: string } | null) => ({ id: `qn-${text.length}`, thread: detail.thread.id, text, options: ["Yes", "No"], reserved: null, answerer, askedAt: 1, answer });
+	const questions = [
+		question("Rebuild the pylon image?\nIt takes ten minutes.", "person", null),
+		question("Deploy the control plane?", "deployer", null),
+		question("Keep the old branch?", "person", { option: "Yes" }),
+	];
+	const text = plain(detailLines(piTheme(), { ...detail, attention: "decision", questions }, [], detail, 0, 200));
+	expect(text.split("\n").filter((l) => l.includes("Needs you"))).toEqual(["   Needs you: Rebuild the pylon image? (answer it on the dashboard)"]);
+});
