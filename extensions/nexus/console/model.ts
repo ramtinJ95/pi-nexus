@@ -29,7 +29,7 @@ const actualBadge: Readonly<Record<string, [label: string, tone: Tone]>> = {
 	unknown: ["unknown", "muted"],
 };
 export const badge = (actual: string): [label: string, tone: Tone] => actualBadge[actual] ?? [actual, "muted"];
-export const desiredTone: Readonly<Record<DesiredPhase, Tone>> = { running: "ok", paused: "idle", deleted: "muted" };
+export const desiredTone: Readonly<Record<DesiredPhase, Tone>> = { running: "ok", reading: "work", paused: "idle", deleted: "muted" };
 export const sessionTone: Readonly<Record<string, Tone>> = { working: "work", idle: "idle", blocked: "bad", done: "ok", unknown: "muted" };
 export const harnessLabel: Readonly<Record<string, string>> = { "claude-code": "Claude Code", pi: "pi", shell: "Shell" };
 

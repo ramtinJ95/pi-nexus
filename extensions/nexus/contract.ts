@@ -32,8 +32,8 @@ export type Diff = Static<typeof Diff>;
 const ThreadStatus = Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("archived"), Type.Literal("deleted")]);
 export type ThreadStatus = Static<typeof ThreadStatus>;
 
-/** What the planner wants of a thread's pylon. */
-const DesiredPhase = Type.Union([Type.Literal("running"), Type.Literal("paused"), Type.Literal("deleted")]);
+/** What the planner wants of a thread's pylon: `reading` while the usage backfill reads an archived thread's pylon (CLI 0.33.0). */
+const DesiredPhase = Type.Union([Type.Literal("running"), Type.Literal("paused"), Type.Literal("deleted"), Type.Literal("reading")]);
 export type DesiredPhase = Static<typeof DesiredPhase>;
 
 const threadFields = {
