@@ -1155,7 +1155,8 @@ export class ThreadScreen implements Component, Focusable {
 		if (run?.run === "parked") lines.push(...wrap(`⚠ ${parkedMessage(run.parkedTasks, archived)}`, "warning"));
 		if (composer.kind === "failed") {
 			lines.push(...wrap(failedText(composer.refused), "error"));
-			lines.push(...wrap(composer.failed, "dim"));
+			// The details' failure ends with the last lines of the pylon's controller log (CLI 0.36.0), which Pylon shows.
+			lines.push(...wrap(composer.failed.split("\n")[0]!, "dim"));
 		} else if (composer.kind === "archived") lines.push(...wrap(archivedText, "muted"));
 		else if (composer.kind === "closed") lines.push(...wrap(composer.reason, "muted"));
 		else if (composer.paused) lines.push(...wrap(pausedText, "muted"));

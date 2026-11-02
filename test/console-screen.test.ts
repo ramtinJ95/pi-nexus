@@ -202,6 +202,18 @@ describe("a Claude worker's thread", () => {
 		expect(idle.text()).toContain("Sent to Claude.");
 	});
 
+	test("a prompt's images show as one [image] line each, as nexus conversation prints them", () => {
+		const s = claude();
+		const image = { offset: 0, bytes: 10, sha256: "ab", index: 0 };
+		const prompts = [
+			{ kind: "prompt" as const, at: asked, text: "Why does the header wrap?", from: "person", images: [image, { ...image, index: 1 }], ordinal: 0 },
+			{ kind: "prompt" as const, at: asked, text: "", from: "person", images: [image], ordinal: 1 },
+		];
+		s.screen.setConversation({ ...claudeConversation, working: false, entries: prompts }, claudeDetail.lastReplyAt);
+		expect(s.text()).toMatch(/Why does the header wrap\?\s*\n\s*\[image\]\s*\n\s*\[image\]/);
+		expect(s.text().match(/\[image\]/g)).toHaveLength(3);
+	});
+
 	test("the actions interrupt Claude's turn while it works, and leave out the harness's retry", async () => {
 		const s = claude();
 		s.normal("m");
@@ -1089,6 +1101,15 @@ describe("thread view", () => {
 		expect(out).toContain("git clone: permission denied");
 		await failed.type("hi");
 		expect(failed.sent).toEqual([]);
+	});
+
+	test("a failed pylon's controller log shows under Pylon, and only its first line by the composer", () => {
+		const log = "git clone: permission denied\n  controller: clone exited 128\n  controller: giving up after 3 tries";
+		const s = open({ entries }, { shown: { ...detail, pylon: { ...detail.pylon, actualState: "failed", failed: log } } });
+		expect(s.text()).toContain("git clone: permission denied");
+		expect(s.text()).not.toContain("controller:");
+		s.normal("4");
+		expect(s.text()).toContain("controller: giving up after 3 tries");
 	});
 
 	test("a parked run says how to retry it, and a paused pylon that a message wakes it", () => {

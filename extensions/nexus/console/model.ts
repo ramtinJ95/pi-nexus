@@ -444,9 +444,11 @@ export function claudeItems(c: ClaudeConversation, model: string | null): Item[]
 		const key = `claude:${c.dropped + e.ordinal}`;
 		const notice = (text: string, tone: "info" | "error" = "info") => items.push({ kind: "notice", key, text, tone });
 		switch (e.kind) {
-			case "prompt":
-				items.push({ kind: "user", key, text: `${promptLabel(e.from)}${e.text}`, at: e.at });
+			case "prompt": {
+				const text = [e.text, ...(e.images ?? []).map(() => "[image]")].filter((part) => part !== "").join("\n");
+				items.push({ kind: "user", key, text: `${promptLabel(e.from)}${text}`, at: e.at });
 				break;
+			}
 			case "reply":
 				items.push({ kind: "assistant", key, message: { role: "assistant", content: [{ type: "text", text: e.text }], model: model ?? "", stopReason: "stop" }, streaming: false });
 				break;
@@ -786,5 +788,6 @@ export const repoOf = (project: Project) => project.repoUrl ?? "scratch";
 export function startHint(project: Project | undefined, form: StartForm): string {
 	if (project === undefined) return "";
 	const repo = project.repoUrl === null ? "starts an empty repository on" : "checks out";
-	return `Boots a pylon on ${form.node.trim() || project.defaultNode} and ${repo} ${form.branch.trim() || project.defaultBranch}.`;
+	const node = form.node.trim() || project.defaultNode;
+	return `Boots a pylon on ${node === "auto" ? "the node with the most room left" : node} and ${repo} ${form.branch.trim() || project.defaultBranch}.`;
 }

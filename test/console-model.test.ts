@@ -307,6 +307,9 @@ describe("previews and starting", () => {
 		expect(startHint(project, { title: "", project: "nexus", node: "nuc", branch: "dev", message: "" })).toBe("Boots a pylon on nuc and checks out dev.");
 		const scratch = { ...project, repoUrl: null };
 		expect(startHint(scratch, { title: "", project: "nexus", node: "", branch: "dev", message: "" })).toBe("Boots a pylon on firebat and starts an empty repository on dev.");
+		const placed = { ...project, defaultNode: "auto" };
+		expect(startHint(placed, { title: "", project: "nexus", node: "", branch: "", message: "" })).toBe("Boots a pylon on the node with the most room left and checks out main.");
+		expect(startHint(placed, { title: "", project: "nexus", node: "nuc", branch: "", message: "" })).toBe("Boots a pylon on nuc and checks out main.");
 	});
 });
 
