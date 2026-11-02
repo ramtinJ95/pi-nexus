@@ -220,7 +220,7 @@ const menuKeys: readonly Binding<MenuCommand>[] = [
 type MenuEntry = Action | "start-again" | "copy-attach" | "open-session" | "attach" | "rewatch";
 interface MenuState {
 	unwatched: boolean;
-	/** A Claude worker's thread, whose run the harness's abort and retry do not reach. */
+	/** A Claude worker's thread, whose turn abort interrupts in its pane (CLI 0.49.0) and whose tasks the harness's retry does not reach. */
 	claude: boolean;
 	working: boolean;
 	parked: boolean;
@@ -231,6 +231,7 @@ interface MenuState {
 const menuEntries: readonly { entry: MenuEntry; label: string; description: string; when(s: MenuState): boolean }[] = [
 	{ entry: "rewatch", label: "Watch again", description: "follow the thread again after its watch ended", when: (s) => s.unwatched },
 	{ entry: "abort", label: "Abort the run", description: "abort the agent's run", when: (s) => s.working && !s.claude },
+	{ entry: "abort", label: "Interrupt Claude's turn", description: "press Esc in Claude's pane, as the dashboard does", when: (s) => s.working && s.claude },
 	{ entry: "retry", label: "Retry the parked tasks", description: "run the parked tasks again", when: (s) => s.parked && !s.claude },
 	{ entry: "retry-pylon", label: "Retry the pylon", description: "boot a failed pylon again", when: (s) => s.composer.kind === "failed" },
 	{ entry: "start-again", label: "Start again", description: "a new thread on the same project", when: (s) => s.loaded },
@@ -686,7 +687,7 @@ export class ThreadScreen implements Component, Focusable {
 	private async act(action: Action): Promise<void> {
 		try {
 			await this.options.actions.act(action);
-			this.say(done[action]);
+			this.say(action === "abort" && this.isClaude ? "Interrupted Claude's turn." : done[action]);
 		} catch (err) {
 			this.say(`/${action} failed: ${err instanceof Error ? err.message : String(err)}`, true);
 		}

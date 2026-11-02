@@ -202,13 +202,22 @@ describe("a Claude worker's thread", () => {
 		expect(idle.text()).toContain("Sent to Claude.");
 	});
 
-	test("the actions leave out abort and retry, which the harness has for Claude", () => {
+	test("the actions interrupt Claude's turn while it works, and leave out the harness's retry", async () => {
 		const s = claude();
 		s.normal("m");
 		const out = s.text();
+		expect(out).toMatch(/→ Interrupt Claude's turn/);
 		expect(out).toContain("Archive");
 		expect(out).not.toContain("Abort the run");
 		expect(out).not.toContain("Retry the parked tasks");
+		s.press(keys.enter);
+		await s.settle();
+		expect(s.acted).toEqual(["abort"]);
+		expect(s.text()).toContain("Interrupted Claude's turn.");
+		const idle = claude();
+		idle.screen.setConversation({ ...claudeConversation, working: false }, claudeDetail.lastReplyAt);
+		idle.normal("m");
+		expect(idle.text()).not.toContain("Interrupt Claude's turn");
 	});
 });
 
