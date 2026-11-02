@@ -2,14 +2,18 @@
  * The strip above pi's editor: one notice when something in Nexus asks for you, as the control plane's attention
  * says, and nothing while threads only work. It names the most urgent thread with what it asks, or counts the threads
  * that need you and those with a new reply, as the status line does, in the look of the most urgent, always on one
- * row. Until the threads are first read, it says why they could not be. It shows from the session's start, and
- * `/nexus strip off` hides it. Scoped to one project, it names the project after `nexus` while there is room.
+ * row. Until the threads are first read, it says why they could not be, on up to three rows. It shows from the
+ * session's start, and `/nexus strip off` hides it. Scoped to one project, it names the project after `nexus` while
+ * there is room.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { toneColor, type Notice } from "./model.ts";
 
 export type StripShows = { kind: "notice"; notice: Notice } | { kind: "failure"; message: string };
+
+/** The most rows a failure takes, since nothing else in Nexus answers while it holds and its reason comes last. */
+const failureRows = 3;
 
 /** The least a thread's title takes beside the project's name; narrower, the name goes. */
 const leastTitle = 8;
@@ -32,7 +36,11 @@ export class Strip implements Component {
 	render(width: number): string[] {
 		const t = this.theme;
 		const head = (named: boolean) => t.fg("dim", named && this.project !== null ? `nexus · ${this.project}` : "nexus");
-		if (this.shows.kind === "failure") return [truncateToWidth(`${head(true)}  ${t.fg("error", this.shows.message)}`, width)];
+		if (this.shows.kind === "failure") {
+			const indent = visibleWidth(head(true)) + 2;
+			const lines = wrapTextWithAnsi(this.shows.message, Math.max(10, width - indent)).slice(0, failureRows);
+			return lines.map((line, i) => truncateToWidth(`${i === 0 ? `${head(true)}  ` : " ".repeat(indent)}${t.fg("error", line)}`, width));
+		}
 		const { top, look, acts, reads } = this.shows.notice;
 		const color = toneColor[look.tone];
 		const room = (named: boolean) => width - visibleWidth(head(named)) - 2 - visibleWidth(look.glyph) - 1;

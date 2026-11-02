@@ -553,9 +553,11 @@ describe("console", () => {
 		n.start();
 		await n.until(() => n.statuses.at(-1) === "nexus failed", "the status");
 		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(400))).toBe(`nexus  ${refusal}`);
-		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60));
-		expect(narrow).toStartWith("nexus  the control plane at");
-		expect(narrow.length).toBeLessThanOrEqual(60);
+		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60)).split("\n");
+		expect(narrow.join(" ").replace(/\s+/g, " ")).toBe(`nexus ${refusal}`);
+		expect(narrow[0]).toStartWith("nexus  the control plane at");
+		expect(narrow.length).toBeLessThanOrEqual(3);
+		for (const line of narrow) expect(line.length).toBeLessThanOrEqual(60);
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
