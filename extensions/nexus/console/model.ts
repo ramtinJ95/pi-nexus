@@ -654,7 +654,7 @@ export function modelOf(entries: readonly RenderedEntry[]): string | undefined {
  */
 export const decisions = (detail: Pick<ThreadDetail, "review" | "questions">): string[] => [
 	...(detail.review?.phase.kind === "needs-person" ? (detail.review.phase.reasons ?? []) : []),
-	...(detail.questions ?? []).filter((q) => q.answer === null && q.answerer === "person").map((q) => `${q.text.split("\n")[0]} (answer it on the dashboard)`),
+	...(detail.questions ?? []).filter((q) => q.answer === null).map((q) => `${q.text.split("\n")[0]} (${q.answerer === "deployer" ? "a deployer answers it" : "answer it"} on the dashboard)`),
 ];
 
 /**

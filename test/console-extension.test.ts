@@ -560,6 +560,16 @@ describe("console", () => {
 		for (const line of narrow) expect(line.length).toBeLessThanOrEqual(60);
 	});
 
+	test("a scoped strip leaves its project out of the refusal, so the upgrade advice at its end still fits", async () => {
+		const refusal = "the control plane at http://nexus.example:7777 runs Nexus 0.40.0, and this CLI needs 0.53.0 or later. Upgrade it, as deploy/README.md describes";
+		const settings = memorySettings({ project: "acme" });
+		const n = load({ ...scenario, fail: { threads: { exit: 1, kind: "failed", error: refusal } } }, { settings });
+		n.start();
+		await n.until(() => n.statuses.at(-1) === "nexus failed", "the status");
+		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60)).split("\n");
+		expect(narrow.join(" ").replace(/\s+/g, " ")).toBe(`nexus ${refusal}`);
+	});
+
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
 		const settings = {
 			read: () => ({ strip: true, project: null }),

@@ -37,9 +37,10 @@ export class Strip implements Component {
 		const t = this.theme;
 		const head = (named: boolean) => t.fg("dim", named && this.project !== null ? `nexus · ${this.project}` : "nexus");
 		if (this.shows.kind === "failure") {
-			const indent = visibleWidth(head(true)) + 2;
+			// The project would push the CLI's upgrade advice, at the message's end, past the rows.
+			const indent = visibleWidth(head(false)) + 2;
 			const lines = wrapTextWithAnsi(this.shows.message, Math.max(10, width - indent)).slice(0, failureRows);
-			return lines.map((line, i) => truncateToWidth(`${i === 0 ? `${head(true)}  ` : " ".repeat(indent)}${t.fg("error", line)}`, width));
+			return lines.map((line, i) => truncateToWidth(`${i === 0 ? `${head(false)}  ` : " ".repeat(indent)}${t.fg("error", line)}`, width));
 		}
 		const { top, look, acts, reads } = this.shows.notice;
 		const color = toneColor[look.tone];
