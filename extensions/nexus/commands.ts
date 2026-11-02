@@ -45,7 +45,7 @@ export const usage = `/nexus                              the working thread ove
 /nexus unpublish <thread> <port>     close a port's preview
 /nexus archive|unarchive|retry|retry-pylon|abort <thread>
 /nexus delete <thread>               asks first
-/nexus strip on|off                  the threads that need you, have news or work, above the editor
+/nexus strip on|off                  a notice above the editor when threads need you
 /nexus project [id|all]              which project's threads show, or the one shown
 /nexus project add <id> <repo-url> --node <node> [--branch <branch>]
 /nexus session open <thread> [--harness claude-code|pi|shell] [--title T]

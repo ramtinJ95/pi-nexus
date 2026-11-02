@@ -358,7 +358,7 @@ export function pickerRows(shown: ReturnType<typeof overview>, unfolded: Readonl
 	return rows;
 }
 
-/** Where a pylon's phase stands against what is wanted of it, for the list's "wants paused". */
+/** The phase each pylon state is in, or on its way to, which "wants paused" compares with what is wanted. */
 const phaseWanted: Readonly<Record<string, DesiredPhase>> = { running: "running", spawning: "running", paused: "paused", pausing: "paused", deleting: "deleted", absent: "deleted" };
 /** What the planner wants of the pylon, while the pylon is not there yet. */
 export const wanting = (desired: DesiredPhase, actual: string) => (phaseWanted[actual] === desired ? null : desired);

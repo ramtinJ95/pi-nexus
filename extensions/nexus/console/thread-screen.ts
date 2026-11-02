@@ -1205,7 +1205,7 @@ export class ThreadScreen implements Component, Focusable {
 		if (!d) return t.fg("dim", this.options.thread);
 		const working = this.isClaude ? (this.claude?.working ?? d.attention === "working") : this.view.state ? this.view.state.run === "working" : d.thread.agentTurnRunning;
 		const [label, tone] = threadState({ ...d.thread, status: this.view.state?.status ?? d.thread.status }, this.view.state?.pylon ?? d.pylon.actualState, working);
-		// The ID is under Pylon, which leaves the bar room for the state, which the title gives way to.
+		// The ID is under Pylon, so the bar's room goes to the state.
 		const state = `${t.fg(toneColor[tone], `● ${label}`)} `;
 		const where = truncateToWidth(` ${d.thread.project} / ${t.bold(d.thread.title)}`, Math.max(1, width - visibleWidth(state) - 2), "…");
 		return truncateToWidth(`${where}${" ".repeat(Math.max(2, width - visibleWidth(where) - visibleWidth(state)))}${state}`, width);

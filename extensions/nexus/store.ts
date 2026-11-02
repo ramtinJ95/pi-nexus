@@ -11,7 +11,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export interface Settings {
 	/** What Changes compares the checkout with, the boot base while absent. */
 	base?: "start" | "head" | "turn";
-	/** Whether the strip of threads that need you, have news or work shows above the editor. */
+	/** Whether the strip above the editor, which says when threads need you, shows. */
 	strip: boolean;
 	/** The project whose threads the picker, the strip and the status line show, or null for every project. */
 	project: string | null;
