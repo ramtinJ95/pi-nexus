@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { Action } from "../extensions/nexus/commands.ts";
@@ -172,7 +173,7 @@ describe("a Claude worker's thread", () => {
 		expect(out).toContain("Background task completed: the test watcher stopped");
 		expect(out).toContain("The model request was interrupted.");
 		expect(out).toContain("Queued: also update the docs");
-		expect(out).toMatch(/Claude fixes the probe ● agent working/);
+		expect(out).toMatch(/Claude fixes the probe +● agent working\n/);
 		expect(out).toMatch(/Working · 1m 12s · 2 tools this turn/);
 		expect(plain(s.screen.render(140))).toMatch(/1 output +Claude Code · claude-opus-5-5\n/);
 		expect(out).not.toContain("This thread has no agent conversation.");
@@ -182,7 +183,7 @@ describe("a Claude worker's thread", () => {
 		const s = claude();
 		s.screen.setConversation({ ...claudeConversation, working: false }, claudeDetail.lastReplyAt);
 		expect(s.text()).not.toContain("Working ·");
-		expect(s.text()).toMatch(/Claude fixes the probe ● running/);
+		expect(s.text()).toMatch(/Claude fixes the probe +● running\n/);
 		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: null, working: false }, claudeDetail.lastReplyAt);
 		expect(s.text()).toContain("Claude's transcript has not been read yet. It is read while the pylon runs.");
 		s.screen.setConversation({ ...claudeConversation, entries: [], readAt: asked, working: false }, claudeDetail.lastReplyAt);
@@ -251,8 +252,8 @@ describe("thread view", () => {
 		expect(out).toContain("✓ backs off");
 		expect(out).toContain("Queued: also update the docs");
 		expect(out).toMatch(/── \S Working · 1m 12s · 4 tools this turn · new messages queue ─+/);
-		expect(out).toContain("nexus / Fix the probe retry ● agent working (th-0123456789ab)");
-		expect(out).toMatch(/pylon running on firebat · seen 1 min ago · wanted running · 1 preview · 1 output +demo-model/);
+		expect(out).toMatch(/^ nexus \/ Fix the probe retry +● agent working\n/);
+		expect(out).toMatch(/pylon running on firebat · seen 1 min ago · 1 output +demo-model/);
 	});
 
 	test("a call whose result goes away is drawn afresh, without its old result or output", () => {
@@ -276,20 +277,46 @@ describe("thread view", () => {
 		expect(out).toMatch(/\+\s+await sleep\(backoff\(attempt\)\);/);
 	});
 
+	test("the title bar keeps the thread's state on the right as its title gives way, and Pylon has the ID", () => {
+		const s = open();
+		const bar = (width: number) => plain([s.screen.render(width)[0]!]);
+		expect(bar(100)).not.toContain(idA);
+		expect(bar(40)).toBe(" nexus / Fix the prob…  ● agent working");
+		expect(bar(24)).toMatch(/^ \S+…  ● agent working$/);
+		s.normal("4");
+		expect(s.text()).toContain(`${idA} · py-0123`);
+	});
+
+	test("the tab row and the mode line stay on one row, dropping the tabs' keys and whole hints, never the key help", () => {
+		const s = open();
+		const lines = (width: number) => plain(s.screen.render(width)).trimEnd().split("\n");
+		expect(lines(60)[1]).toBe(" 1 Conversation   2 Changes   3 Previews 1   4 Pylon");
+		expect(lines(48)[1]).toBe(" Conversation  Changes  Previews 1  Pylon");
+		expect(lines(60).at(-1)).toBe("NORMAL  i write  j/k scroll  d/u half page  s keys");
+		expect(lines(30).at(-1)).toBe("NORMAL  i write  s keys");
+		for (const width of [30, 48, 60, 100]) for (const line of s.screen.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	});
+
+	test("the footer says what is wanted of the pylon only while it is not there yet", () => {
+		const s = open({ entries, state: { ...idle, pylon: "running" } }, { shown: { ...detail, desired: "paused" } });
+		expect(s.text()).toMatch(/pylon running on firebat · seen 1 min ago · wants paused · 1 output/);
+		expect(open().text()).not.toContain("wants");
+	});
+
 	test("the hint line under the footer names the mode and the keys that work there, in pi's hint style", () => {
 		const s = open();
 		const hints = () => s.text().trimEnd().split("\n").at(-1)!;
-		expect(s.text()).toMatch(/demo-model\nNORMAL {2}i write {2}j\/k scroll {2}d\/u half page {2}h\/l views {2}m actions {2}s keys {2}q close/);
+		expect(s.text()).toMatch(/demo-model\nNORMAL {2}i write {2}j\/k scroll {2}d\/u half page {2}h\/l views {2}m actions {2}q close {2}s keys\n/);
 		// pi's hint colours: the key dim, what it does muted.
 		const t = piTheme();
 		expect(s.screen.render(100).join("\n")).toContain(`${t.fg("dim", "i")}${t.fg("muted", " write")}`);
 		s.normal("3");
 		expect(hints()).toMatch(/^NORMAL {2}i write {2}j\/k select {2}enter publish {2}x unpublish {2}y copy {2}h\/l views/);
 		s.press("i");
-		expect(hints()).toBe("INSERT  esc normal mode  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools");
+		expect(hints()).toBe("INSERT  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools  esc normal mode");
 		s.press(":");
 		expect(s.sent).toEqual([]);
-		expect(hints()).toBe("INSERT  esc normal mode  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools");
+		expect(hints()).toBe("INSERT  enter send  / commands  pgup/pgdn scroll  ctrl+o expand tools  esc normal mode");
 	});
 
 	test("the view opens in normal mode, where letters move it; i or a writes, Esc stops, and only insert mode shows the cursor", async () => {
@@ -381,7 +408,7 @@ describe("thread view", () => {
 		expect(lines).toHaveLength(12);
 		const out = plain(lines);
 		expect(out).toContain("Working ·");
-		expect(out).toContain("nexus / Fix the probe retry ● agent working (th-0123456789ab)");
+		expect(out).toMatch(/^ nexus \/ Fix the probe retry +● agent working\n/);
 		expect(out).toContain("Nexus is unreachable: no proxy. Still watching.");
 		const tall = open({ entries, state: working, live: { ...live, queued } }).text();
 		expect(tall).toContain("Queued: follow-up 2");
@@ -986,7 +1013,7 @@ describe("thread view", () => {
 		expect(s.text()).not.toContain("port-8080");
 		expect(s.text()).toMatch(/Ports 1\n +● 8080  no preview yet\. \/open 8080 publishes one/);
 		expect(s.text()).toContain("Port 8080 is unpublished. /open 8080 publishes it again, maybe at a new URL.");
-		expect(s.text()).toMatch(/· 1 preview ·/);
+		expect(s.text()).toContain("3 Previews 1");
 	});
 
 	test("an unpublished port stays under Ports until details asked for after it, whatever an older read or a failed /open says", async () => {

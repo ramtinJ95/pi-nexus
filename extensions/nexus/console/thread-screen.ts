@@ -27,7 +27,7 @@ import type { Base, ClaudeConversation, NodeSummary, OpenedSession, Preview, Sen
 import { claudeQueued, portBusy, type ThreadView } from "../thread.ts";
 import { detailLines, portLines, sessionLines } from "./inspector.ts";
 import { Checkout, changesLines, type CheckoutActions } from "./changes.ts";
-import { helpLines, hint, KeyReader, type Binding } from "./keys.ts";
+import { helpLines, hint, KeyReader, modeLine, type Binding } from "./keys.ts";
 import {
 	ago,
 	archivedText,
@@ -61,6 +61,7 @@ import {
 	shownSessions,
 	threadState,
 	toneColor,
+	wanting,
 } from "./model.ts";
 import { SessionForm } from "./session-form.ts";
 import { Transcript, type Display } from "./transcript.ts";
@@ -1166,15 +1167,16 @@ export class ThreadScreen implements Component, Focusable {
 		return out;
 	}
 
-	/** The views by name, the shown one in the accent colour, with their keys. */
+	/** The views by name, the shown one in the accent colour, with their keys while they fit on the row. */
 	private tabLine(width: number): string {
 		const t = this.theme;
 		const counts: Partial<Record<Tab, number>> = { changes: this.checkout.changes?.files.length, previews: this.shown().previews.length };
-		const parts = tabs.map(({ tab, label }, i) => {
+		const names = tabs.map(({ tab, label }) => {
 			const name = `${label}${counts[tab] !== undefined ? ` ${counts[tab]}` : ""}`;
-			return `${t.fg("dim", String(i + 1))} ${tab === this.tab ? t.fg("accent", t.bold(name)) : t.fg("muted", name)}`;
+			return tab === this.tab ? t.fg("accent", t.bold(name)) : t.fg("muted", name);
 		});
-		return truncateToWidth(` ${parts.join("   ")}`, width);
+		const keyed = ` ${names.map((name, i) => `${t.fg("dim", String(i + 1))} ${name}`).join("   ")}`;
+		return truncateToWidth(visibleWidth(keyed) <= width ? keyed : ` ${names.join("  ")}`, width);
 	}
 
 	private footer(width: number): string[] {
@@ -1185,11 +1187,10 @@ export class ThreadScreen implements Component, Focusable {
 			const actual = this.view.state?.pylon ?? d.pylon.actualState;
 			parts.push(`pylon ${badge(actual)[0]} on ${d.pylon.node}`);
 			if (d.pylon.observedAt !== null) parts.push(`seen ${ago(Date.parse(d.pylon.observedAt), this.now())}`);
-			parts.push(`wanted ${d.desired}`);
-			const shown = this.shown();
-			const previews = shown.previews.length;
-			const outputs = shownOutputs({ ...d, ...shown }).length;
-			parts.push(`${previews} ${previews === 1 ? "preview" : "previews"}`, `${outputs} ${outputs === 1 ? "output" : "outputs"}`);
+			const wants = wanting(d.desired, actual);
+			if (wants !== null) parts.push(`wants ${wants}`);
+			const outputs = shownOutputs({ ...d, ...this.shown() }).length;
+			parts.push(`${outputs} ${outputs === 1 ? "output" : "outputs"}`);
 		}
 		const left = parts.join(" · ");
 		const worker = d?.claudeWorker;
@@ -1204,10 +1205,13 @@ export class ThreadScreen implements Component, Focusable {
 		if (!d) return t.fg("dim", this.options.thread);
 		const working = this.isClaude ? (this.claude?.working ?? d.attention === "working") : this.view.state ? this.view.state.run === "working" : d.thread.agentTurnRunning;
 		const [label, tone] = threadState({ ...d.thread, status: this.view.state?.status ?? d.thread.status }, this.view.state?.pylon ?? d.pylon.actualState, working);
-		return truncateToWidth(` ${d.thread.project} / ${t.bold(d.thread.title)} ${t.fg(toneColor[tone], `● ${label}`)} ${t.fg("dim", `(${this.options.thread})`)}`, width);
+		// The ID is under Pylon, which leaves the bar room for the state, which the title gives way to.
+		const state = `${t.fg(toneColor[tone], `● ${label}`)} `;
+		const where = truncateToWidth(` ${d.thread.project} / ${t.bold(d.thread.title)}`, Math.max(1, width - visibleWidth(state) - 2), "…");
+		return truncateToWidth(`${where}${" ".repeat(Math.max(2, width - visibleWidth(where) - visibleWidth(state)))}${state}`, width);
 	}
 
-	/** The mode, then the keys that work there, in pi's hint style, under the footer. */
+	/** The mode, then the keys that work there that fit whole, in pi's hint style, under the footer. */
 	private hints(width: number): string {
 		const t = this.theme;
 		const k = (command: Command, description: string) => hint(threadKeys, command, description);
@@ -1217,7 +1221,7 @@ export class ThreadScreen implements Component, Focusable {
 		if (this.menu) keys = [rawKeyHint("j/k", "move"), rawKeyHint("enter", "choose"), rawKeyHint("esc", "cancel")];
 		else if (this.form) keys = [rawKeyHint("tab", "next field"), rawKeyHint("←→", "harness"), rawKeyHint("enter", "open"), rawKeyHint("esc", "cancel")];
 		else if (this.help) keys = [rawKeyHint("any key", "closes the help")];
-		else if (this.mode === "insert") keys = [rawKeyHint("esc", "normal mode"), rawKeyHint("enter", "send"), rawKeyHint("/", "commands"), rawKeyHint("pgup/pgdn", "scroll"), expand];
+		else if (this.mode === "insert") keys = [rawKeyHint("enter", "send"), rawKeyHint("/", "commands"), rawKeyHint("pgup/pgdn", "scroll"), expand, rawKeyHint("esc", "normal mode")];
 		else if (this.tab === "changes") keys = [rawKeyHint("j/k", this.checkout.file ? "scroll" : "select"),
 			...(this.checkout.note() ? this.checkout.canWake ? [rawKeyHint("enter/o", "wake and read")] : [] : this.checkout.file ? [rawKeyHint("d/u", "half page")] : [rawKeyHint("enter/o", "open/fold")]),
 			rawKeyHint("c", `only uncommitted: ${this.checkout.base === "head" ? "on" : "off"}`), rawKeyHint("T", `latest turn: ${this.checkout.base === "turn" ? "on" : "off"}`), rawKeyHint("r", "read"), rawKeyHint("y", "copy path"), rawKeyHint("h/esc", this.checkout.file ? "tree" : "back"), k("help", "keys")];
@@ -1228,11 +1232,11 @@ export class ThreadScreen implements Component, Focusable {
 					: this.tab === "pylon"
 						? [rawKeyHint("j/k", "select"), k("activate", "attach"), k("remove", "close"), k("openSession", "open"), k("copy", "copy")]
 						: [rawKeyHint("j/k", "scroll"), rawKeyHint("d/u", "half page")];
-			keys = [k("insert", "write"), ...move, rawKeyHint("h/l", "views"), k("actions", "actions"), k("help", "keys"), k("close", "close"), ...(this.tab === "conversation" ? [expand] : [])];
+			keys = [k("insert", "write"), ...move, rawKeyHint("h/l", "views"), k("actions", "actions"), k("close", "close"), ...(this.tab === "conversation" ? [expand] : []), k("help", "keys")];
 		}
 		const mode = this.mode === "insert" ? t.bold(t.fg("success", "INSERT")) : t.bold(t.fg("accent", "NORMAL"));
 		const waiting = this.keys.waiting === "" ? "" : `  ${t.fg("muted", this.keys.waiting)}`;
-		return truncateToWidth(`${mode}${waiting}  ${keys.join("  ")}`, width);
+		return modeLine(`${mode}${waiting}`, keys, width);
 	}
 
 	private helpLines(width: number): string[] {

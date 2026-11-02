@@ -67,7 +67,7 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	kv("Human", ago(thread.lastHumanActivityAt, now));
 	kv("Agent", thread.agentTurnRunning ? "turn running" : ago(thread.lastAgentActivityAt, now));
 	for (const reason of decisions(detail)) w.wrapped(`Needs you: ${reason}`, "error");
-	lines.push(`   ${t.fg("dim", pylon.id)}`);
+	lines.push(`   ${t.fg("dim", `${thread.id} · ${pylon.id}`)}`);
 	if (pylon.failed !== null) w.wrapped(`The planner gave up: ${pylon.failed}`, "error");
 
 	const outputs = shownOutputs({ ...detail, previews: shown.previews });
