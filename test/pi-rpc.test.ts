@@ -147,8 +147,8 @@ describe("pi-nexus in pi", () => {
 		expect(pi.calls().filter((c) => c[0] === "send")).toEqual([["send", "--json", idA, "--", "hi there"]]);
 		expect(notes(pi.lines).map((n) => n.body)).toEqual(["> hi", "Hello from the pylon."]);
 		// The widget clears after the notice, so wait for it rather than read it at once.
-		await pi.waitFor((l) => l.method === "setWidget" && l.widgetLines === undefined);
-		const widgets = pi.lines.filter((l) => l.method === "setWidget");
+		await pi.waitFor((l) => l.method === "setWidget" && l.widgetKey === "nexus" && l.widgetLines === undefined);
+		const widgets = pi.lines.filter((l) => l.method === "setWidget" && l.widgetKey === "nexus");
 		expect(widgets[0]!.widgetLines).toEqual([`following ${idA}: connecting`]);
 	}, 30_000);
 

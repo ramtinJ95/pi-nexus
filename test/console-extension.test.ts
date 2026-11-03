@@ -13,6 +13,10 @@ const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
 const projects = [{ id: "acme", repoUrl: "git@example.com:acme", defaultNode: "firebat", defaultBranch: "main" }];
+/** Whether the console shows a thread view, and of `thread`, the one whose details it read last: the title bar names no ID. */
+const showing = (n: { text(): string; calls(): string[][] }, thread: string) =>
+	n.text().includes("1 Conversation") && n.calls().filter((c) => c[0] === "show").at(-1)?.includes(thread) === true;
+
 const scenario: Scenario = {
 	responses: { threads, projects, nodes: [{ name: "firebat", tailnetHost: "firebat.example", state: "online" }], show: detail, wake: null, send: { submission: 1 }, start: threads[0] },
 	watch: [{ event: reset(idA, entries) }, { event: state(idA, working) }, { event: { type: "live", thread: idA, ...live } }],
@@ -255,7 +259,7 @@ describe("console", () => {
 	test("/unpublish runs nexus unpreview, shows the preview closing, then the port under Ports", async () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null }, after: { unpreview: { show: detail } }, delayMs: { unpreview: 500 } });
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 2"), "the thread view");
 		n.normal("3");
 		expect(n.text()).toContain("/unpublish 8080 closes it");
 		n.type("/unpublish 8080");
@@ -271,7 +275,7 @@ describe("console", () => {
 		const own = { pylon: "py-1", service: "port-8080", httpsPort: 8445, ready: true, url: "https://firebat.example.ts.net:8445/" };
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, preview: own, unpreview: null }, delayMs: { preview: 800 } });
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 2"), "the thread view");
 		n.normal("3");
 		const publishing = n.tool("nexus_preview", { thread: idA, port: 8080 });
 		await n.until(() => n.calls().some((c) => c[0] === "preview"), "the model's publish");
@@ -287,7 +291,7 @@ describe("console", () => {
 		// Another client unpublishes port 8080 as soon as it is published, so every show lists it with no preview.
 		const n = load({ ...scenario, responses: { ...scenario.responses, preview: { ...own, pylon: "py-0123", httpsPort: 8445 } } });
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("1 preview"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 1"), "the thread view");
 		n.normal("3");
 		n.type("/open 8080");
 		await n.until(() => n.text().includes("Port 8080 is open at"), "the preview");
@@ -300,7 +304,7 @@ describe("console", () => {
 		// Another client publishes port 8080 again as soon as it is unpublished, so every show lists its preview.
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null } });
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 2"), "the thread view");
 		n.normal("3");
 		n.type("/unpublish 8080");
 		await n.until(() => n.text().includes("Port 8080 is unpublished."), "the unpublish");
@@ -312,14 +316,14 @@ describe("console", () => {
 	test("leaving the view mid-unpublish stops its CLI, so reopening offers the port afresh with nothing pending", async () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: published, unpreview: null }, after: { unpreview: { show: detail } }, delayMs: { unpreview: 1_500 } });
 		const first = n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 2"), "the thread view");
 		n.normal("3");
 		n.type("/unpublish 8080");
 		await n.until(() => n.calls().some((c) => c[0] === "unpreview") && n.text().includes("closing..."), "the unpublish to start");
 		n.normal("q");
 		await first;
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 2 && n.text().includes("2 previews"), "the view again");
+		await n.until(() => n.shown.length === 2 && n.text().includes("Previews 2"), "the view again");
 		n.normal("3");
 		expect(n.text()).toContain("/unpublish 8080 closes it");
 		expect(n.text()).not.toContain("closing...");
@@ -334,7 +338,7 @@ describe("console", () => {
 	test("/unpublish on a CLI without unpreview says to update it", async () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, show: published }, fail: { unpreview: { exit: 64, kind: "invalid", error: "unknown command unpreview" } } });
 		void n.run(`open ${idA}`);
-		await n.until(() => n.shown.length === 1 && n.text().includes("2 previews"), "the thread view");
+		await n.until(() => n.shown.length === 1 && n.text().includes("Previews 2"), "the thread view");
 		n.normal("3");
 		n.type("/unpublish 8080");
 		await n.until(() => n.text().includes("did not close. /unpublish 8080 tries again"), "the failure");
@@ -392,12 +396,12 @@ describe("console", () => {
 	test("/nexus opens on the working thread with the picker under it, so h goes back to the picker and q closes", async () => {
 		const n = load(scenario);
 		const done = n.run("");
-		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix the probe retry ● agent working (th-0123456789ab)"), "the working thread");
+		await n.until(() => n.shown.length === 1 && showing(n, idA) && /nexus \/ Fix the probe retry +● agent working\n/.test(n.text()), "the working thread");
 		expect(n.shown[0]!.options).toMatchObject({ overlay: true });
 		n.press("h");
 		await n.until(() => n.shown.length === 2 && n.text().includes(threads[1]!.title), "the picker");
 		expect(n.shown[1]!.options).toBeUndefined();
-		expect(n.text()).toContain(`→ ● ${threads[0]!.title}`);
+		expect(n.text()).toContain(`→ ◉ ${threads[0]!.title}`);
 		expect(n.calls()).toContainEqual(["threads", "--json", "--all"]);
 		expect(n.calls()).toContainEqual(["projects", "--json"]);
 		n.press("q");
@@ -411,13 +415,13 @@ describe("console", () => {
 		const done = n.run("");
 		await n.until(() => n.shown.length === 1 && n.text().includes(threads[1]!.title), "the picker");
 		n.press("j", "\r");
-		await n.until(() => n.shown.length === 2 && n.text().includes(`(${idA})`), "the first thread");
+		await n.until(() => n.shown.length === 2 && showing(n, idA), "the first thread");
 		n.press("t");
 		await n.until(() => n.shown.length === 3 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker on that thread");
 		n.press("j", "\r");
-		await n.until(() => n.shown.length === 4 && n.text().includes(`(${idB})`), "the second thread");
+		await n.until(() => n.shown.length === 4 && showing(n, idB), "the second thread");
 		n.press("h");
-		await n.until(() => n.shown.length === 5 && n.text().includes(`(${idA})`), "the first thread again");
+		await n.until(() => n.shown.length === 5 && showing(n, idA), "the first thread again");
 		n.press("h");
 		await n.until(() => n.shown.length === 6 && n.text().includes(threads[1]!.title), "the picker again");
 		n.press("q");
@@ -489,7 +493,7 @@ describe("console", () => {
 		expect(n.calls().some((c) => c[0] === "seen")).toBe(false);
 	});
 
-	test("the strip above the editor lists the threads that need you, have news or work, and /nexus strip off hides it for later sessions too", async () => {
+	test("the strip above the editor is one notice for the threads that ask for you, never for work, and /nexus strip off hides it for later sessions too", async () => {
 		const list = [
 			{ ...threads[0]!, title: "Fix the probe retry", attention: "working", lastHumanActivityAt: Date.now() - 180_000 },
 			row(idB, { title: "Answered", attention: "reply", lastReplyAt: 1_000 }),
@@ -501,9 +505,7 @@ describe("console", () => {
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
 		expect(key).toBe("nexus-strip");
-		const line = plain(strip!(fakeTui(), piTheme()).render(200));
-		expect(line).toMatch(/^nexus ● Broken needs you {2}· {2}● Answered new reply {2}· {2}● Fix the probe retry working 3 min$/);
-		expect(plain(strip!(fakeTui(), piTheme()).render(50))).toMatch(/^nexus ● Broken needs you {2}\+2 more$/);
+		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ Broken  failed");
 		await n.run("strip off");
 		// Off stops the polling, so the strip and the summary it keeps go together.
 		expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
@@ -528,7 +530,8 @@ describe("console", () => {
 		n.start();
 		await n.until(() => n.statuses.at(-1) === "nexus 1 working", "the summary");
 		expect(n.calls()).toEqual([["threads", "--json"]]);
-		expect(n.widgets.at(-1)?.[1]).toBeDefined();
+		// A thread that only works asks nothing of the person, so the strip stays empty.
+		expect(n.widgets).toEqual([["nexus-strip", undefined]]);
 		const off = load(scenario, { settings: memorySettings({ strip: false }) });
 		off.start();
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -540,8 +543,31 @@ describe("console", () => {
 		const n = load({ ...scenario, responses: { ...scenario.responses, threads: list } });
 		await n.run("list");
 		await n.until(() => n.statuses.at(-1) === "nexus 0 working · 1 needs you", "needs you");
-		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus ● Parked one needs you");
+		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ Parked one  parked");
 		expect(n.calls().some((c) => c[0] === "watch")).toBe(false);
+	});
+
+	test("until the threads are first read, the strip says why they cannot be, such as a control plane too old for the CLI", async () => {
+		const refusal = "the control plane at http://nexus.example:7777 runs Nexus 0.40.0, and this CLI needs 0.53.0 or later. Upgrade it, as deploy/README.md describes";
+		const n = load({ ...scenario, fail: { threads: { exit: 1, kind: "failed", error: refusal } } });
+		n.start();
+		await n.until(() => n.statuses.at(-1) === "nexus failed", "the status");
+		expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(400))).toBe(`nexus  ${refusal}`);
+		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60)).split("\n");
+		expect(narrow.join(" ").replace(/\s+/g, " ")).toBe(`nexus ${refusal}`);
+		expect(narrow[0]).toStartWith("nexus  the control plane at");
+		expect(narrow.length).toBeLessThanOrEqual(3);
+		for (const line of narrow) expect(line.length).toBeLessThanOrEqual(60);
+	});
+
+	test("a scoped strip leaves its project out of the refusal, so the upgrade advice at its end still fits", async () => {
+		const refusal = "the control plane at http://nexus.example:7777 runs Nexus 0.40.0, and this CLI needs 0.53.0 or later. Upgrade it, as deploy/README.md describes";
+		const settings = memorySettings({ project: "acme" });
+		const n = load({ ...scenario, fail: { threads: { exit: 1, kind: "failed", error: refusal } } }, { settings });
+		n.start();
+		await n.until(() => n.statuses.at(-1) === "nexus failed", "the status");
+		const narrow = plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(60)).split("\n");
+		expect(narrow.join(" ").replace(/\s+/g, " ")).toBe(`nexus ${refusal}`);
 	});
 
 	test("a strip setting that cannot be saved still applies, for this session only, and says so", async () => {
@@ -576,18 +602,18 @@ describe("console", () => {
 		await n.until(() => n.shown.length === 1 && n.text().includes("nexus / Fix"), "the thread view");
 		n.press("i", ..."half-written draft", "\x1b");
 		n.press("t");
-		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker");
 		// Esc leaves the picker without choosing, back to the thread.
 		n.press("\x1b");
-		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+		await n.until(() => n.shown.length === 3 && showing(n, idA), "the thread again");
 		expect(n.text()).toContain("half-written draft");
 		n.press("t");
-		await n.until(() => n.shown.length === 4 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker again");
+		await n.until(() => n.shown.length === 4 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker again");
 		n.press("j", "\r");
-		await n.until(() => n.shown.length === 5 && n.text().includes(`(${idB})`), "the second thread");
+		await n.until(() => n.shown.length === 5 && showing(n, idB), "the second thread");
 		expect(n.text()).not.toContain("half-written draft");
 		n.press("h");
-		await n.until(() => n.shown.length === 6 && n.text().includes(`(${idA})`), "the first thread again");
+		await n.until(() => n.shown.length === 6 && showing(n, idA), "the first thread again");
 		expect(n.text()).toContain("half-written draft");
 		n.press("q");
 		await done;
@@ -606,7 +632,7 @@ describe("console", () => {
 			const done = n.run(`open ${idA}`);
 			await n.until(() => n.shown.length === 1 && n.text().includes("I'll read the probe first."), "the transcript");
 			expect(n.text()).toContain("Background task completed: the test watcher stopped");
-			expect(n.text()).toMatch(/Claude fixes the probe ● agent working/);
+			expect(n.text()).toMatch(/Claude fixes the probe +● agent working\n/);
 			expect(n.calls().find((c) => c[0] === "conversation")).toEqual(["conversation", "--json", "--", idA]);
 			await n.until(() => reads(n) === 2, "the read 2 seconds later");
 			n.type("and the changelog");
@@ -733,9 +759,9 @@ describe("console", () => {
 		n.type("ship it");
 		await n.until(() => n.text().includes("The message was not sent"), "the failed send");
 		n.press("\x1b", "t");
-		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ● ${threads[0]!.title}`), "the picker");
+		await n.until(() => n.shown.length === 2 && n.text().includes(`→ ◉ ${threads[0]!.title}`), "the picker");
 		n.press("\x1b");
-		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+		await n.until(() => n.shown.length === 3 && showing(n, idA), "the thread again");
 		expect(n.text()).toContain("ship it");
 		n.press("i", "\r");
 		await n.until(() => n.calls().filter((c) => c[0] === "send").length === 2, "the retry");
@@ -755,7 +781,7 @@ describe("console", () => {
 		expect(n.text(1)).toContain("Fix the probe retry");
 		// Cancelling the form goes back to the thread.
 		n.shown[1]!.done(null);
-		await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+		await n.until(() => n.shown.length === 3 && showing(n, idA), "the thread again");
 		n.press("q");
 		await done;
 	});
@@ -786,7 +812,7 @@ describe("console", () => {
 			expect(n.text()).not.toContain(threads[1]!.title);
 			expect(settings.writes).toEqual([{ project: "spoon" }]);
 			await n.until(() => n.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "the summary of spoon");
-			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus spoon · ● Spoon work new reply");
+			expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
 			n.press("q");
 			await done;
 			const later = load(idleScenario, { settings });
@@ -801,13 +827,13 @@ describe("console", () => {
 			n.normal("p");
 			await n.until(() => n.shown.length === 2 && n.text().includes("+ New project…"), "the project picker");
 			n.press("\x1b");
-			await n.until(() => n.shown.length === 3 && n.text().includes(`(${idA})`), "the thread again");
+			await n.until(() => n.shown.length === 3 && showing(n, idA), "the thread again");
 			n.press("p");
 			await n.until(() => n.shown.length === 4 && n.text().includes("git@example.com:spoon"), "the project picker again");
 			n.press("j", "j", "o");
 			await n.until(() => n.shown.length === 5 && n.text().includes("Nexus threads · spoon") && n.text().includes("Spoon work"), "spoon's threads");
 			n.press("\x1b");
-			await n.until(() => n.shown.length === 6 && n.text().includes(`(${idA})`), "the thread behind them");
+			await n.until(() => n.shown.length === 6 && showing(n, idA), "the thread behind them");
 			n.press("q");
 			await done;
 		});

@@ -8,19 +8,17 @@ import {
 	argumentsDiff,
 	attachCommand,
 	blocks,
-	chips,
 	clock,
 	composerOf,
 	conversationItems,
 	exitCode,
-	groups,
-	markOf,
+	lookOf,
 	modelOf,
-	pickerRows,
 	previewLook,
 	runOf,
 	shellQuote,
 	shownResult,
+	stripNotice,
 	startArgs,
 	startHint,
 	stepsSummary,
@@ -32,46 +30,67 @@ import {
 	type Item,
 	type ToolItem,
 } from "../extensions/nexus/console/model.ts";
-import type { Session } from "../extensions/nexus/contract.ts";
+import type { Session, ThreadRow } from "../extensions/nexus/contract.ts";
 import type { RenderedEntry } from "../extensions/nexus/contract.ts";
 import { parseConversation } from "../extensions/nexus/contract.ts";
 import { contentText, reduce } from "../extensions/nexus/thread.ts";
 import { Scope } from "../extensions/nexus/scope.ts";
-import { asked, detail, editDetails, entries, live, memorySettings, runningCall, working } from "./console-fixture.ts";
+import { asked, detail, editDetails, entries, live, memorySettings, piTheme, plain, runningCall, working } from "./console-fixture.ts";
+import { Strip } from "../extensions/nexus/console/strip.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { idA, idB, idC, idle, row, thread } from "./fixtures.ts";
 
 const project = { id: "nexus", repoUrl: "git@example.com:nexus", defaultNode: "firebat", defaultBranch: "main" };
 const tools = (items: Item[]) => items.filter((i): i is ToolItem => i.kind === "tool");
 
-describe("markers", () => {
+describe("the status line and the strip", () => {
 	const failed = row(idA, { title: "Broken", attention: "failed", lastAgentActivityAt: 1 });
 	const reply = row(idB, { title: "Answered", attention: "reply", lastReplyAt: 5, lastAgentActivityAt: 5 });
 	const claude = row(idC, { title: "Claude at work", attention: "working", lastAgentActivityAt: 9 });
 	const waiting = row("th-0000000000aa", { title: "Waiting", attention: "waiting", lastAgentActivityAt: 3 });
 	const archived = row("th-0000000000bb", { title: "Archived", attention: "reply", status: "archived" });
+	const limited = row("th-0000000000ee", { title: "Out of tokens", attention: "limited", lastAgentActivityAt: 2 });
+	const strip = (threads: ThreadRow[], width = 200, project: string | null = null) => {
+		const notice = stripNotice(threads);
+		return notice === null ? null : plain(new Strip(piTheme(), { kind: "notice", notice }, project).render(width));
+	};
 
 	test("the status line counts the control plane's attention, and a Claude worker's turn as working", () => {
 		expect(summary([failed, reply, claude, waiting, archived])).toBe("nexus 1 working · 2 needs you · 1 new");
 		expect(summary([row(idA, { agentTurnRunning: true })], "spoon")).toBe("nexus spoon · 1 working");
 	});
 
-	test("the strip lists what needs you, then new replies, then work, an unknown attention not at all", () => {
-		const unknown = row("th-0000000000cc", { attention: "stalled" });
-		expect(chips([claude, reply, archived, failed, unknown, waiting]).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Waiting", "needs-you"],
-			["Broken", "needs-you"],
-			["Answered", "new"],
-			["Claude at work", "working"],
-		]);
+	test("a Claude worker stopped on its usage limit needs you, as a failed pylon does", () => {
+		expect(summary([limited, reply])).toBe("nexus 0 working · 1 needs you · 1 new");
+		expect(strip([reply, limited])).toBe("nexus  ◷ Out of tokens  usage limit");
+		expect(strip([limited])).toBe("nexus  ◷ Out of tokens  usage limit");
 	});
 
-	test("a review that left a decision to the person needs them, ahead of new replies", () => {
-		const decide = row("th-0000000000dd", { title: "Decide", attention: "decision" });
-		expect(summary([reply, decide])).toBe("nexus 0 working · 1 needs you · 1 new");
-		expect(chips([reply, decide]).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Decide", "needs-you"],
-			["Answered", "new"],
-		]);
+	test("the strip is one notice, in the look of the most urgent thread, and counts the threads the dashboard's Needs you lists", () => {
+		const unknown = row("th-0000000000cc", { attention: "stalled" });
+		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 2 threads need you");
+		expect(strip([claude, waiting])).toBe("nexus  ◇ Waiting  waiting for input");
+		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! Decide  needs your decision");
+	});
+
+	test("threads that only work, have a new reply, or ask nothing this table knows, leave the strip empty", () => {
+		expect(strip([claude, reply, archived, row("th-0000000000cc", { attention: "stalled" }), row("th-0000000000dd")])).toBeNull();
+	});
+
+	test("the strip fits one row: the project's name goes before the title gets short, and the count shortens", () => {
+		const long = row(idA, { title: "A very long thread title that goes on", attention: "failed" });
+		expect(strip([long], 200, "spoon")).toBe("nexus · spoon  ✕ A very long thread title that goes on  failed");
+		expect(strip([long], 36, "spoon")).toBe("nexus · spoon  ✕ A very lon…  failed");
+		expect(strip([long], 26, "spoon")).toBe("nexus  ✕ A very l…  failed");
+		expect(strip([failed, reply, waiting], 40)).toBe("nexus  ✕ 2 threads need you");
+		expect(strip([failed, reply, waiting], 24)).toBe("nexus  ✕ 2 need you");
+		for (let width = 16; width <= 80; width++) {
+			for (const threads of [[long], [failed, reply, waiting]]) {
+				const line = new Strip(piTheme(), { kind: "notice", notice: stripNotice(threads)! }, "spoon").render(width);
+				expect(line).toHaveLength(1);
+				expect(visibleWidth(line[0]!)).toBeLessThanOrEqual(width);
+			}
+		}
 	});
 
 	test("unread replies of builders, reviewers and check threads need no one, as the dashboard's Needs you says", () => {
@@ -82,13 +101,7 @@ describe("markers", () => {
 		const unreadReply = row(id(9), { title: "Answered", attention: "reply", lastReplyAt: 9, lastAgentActivityAt: 9 });
 		const all = [...builders, ...reviewers, check, unreadReply];
 		expect(summary(all)).toBe("nexus 0 working · 5 new");
-		expect(chips(all).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Answered", "new"],
-			["Builder 4", "new"],
-			["Builder 3", "new"],
-			["Builder 2", "new"],
-			["Builder 1", "new"],
-		]);
+		expect(strip(all)).toBeNull();
 	});
 
 	test("a usage limit or a dialog in the terminal needs you, even behind a new reply or a turn", () => {
@@ -97,24 +110,24 @@ describe("markers", () => {
 		const busy = row(idC, { title: "Busy", attention: "working", sessionTurnRunning: true, sessionWaiting: true });
 		const closed = row("th-0000000000ee", { attention: "limited", sessionWaiting: true, status: "archived" });
 		expect(summary([limited, dialog, busy, closed])).toBe("nexus 1 working · 3 needs you");
+		expect(lookOf(dialog)?.word).toBe("waiting for input");
 	});
 
 	test("a loop's thread needs you as any other does, and its reply shows only as work while it works", () => {
 		const failedReview = row(idA, { title: "Review of #1", attention: "failed", startedBy: "nexus-review" });
 		const busyCheck = row(idB, { title: "Check of #2", attention: "reply", lastReplyAt: 5, sessionTurnRunning: true, startedBy: "nexus-check" });
-		expect(chips([failedReview, busyCheck]).map((c) => [c.thread.title, c.kind])).toEqual([
-			["Review of #1", "needs-you"],
-			["Check of #2", "working"],
-		]);
+		expect(lookOf(failedReview)?.asks).toBe("act");
+		expect(lookOf(busyCheck)?.word).toBe("working");
 		const verify = row(idA, { title: "Verify #3", attention: "reply", lastReplyAt: 5, startedBy: "nexus-verify" });
 		expect(summary([verify])).toBe("nexus 0 working");
-		expect(markOf({ ...verify, sessionWaiting: true })).toBe("needs-you");
+		expect(strip([verify])).toBeNull();
+		expect(lookOf({ ...verify, sessionWaiting: true })?.asks).toBe("act");
 	});
 
 	test("an idle thread needs you as an active one does, a deleted one never, and only a session that says so waits", () => {
-		expect(markOf(row(idA, { attention: "decision", status: "idle" }))).toBe("needs-you");
-		expect(markOf(row(idA, { attention: "failed", sessionWaiting: true, status: "deleted" }))).toBeNull();
-		expect(markOf(row(idA, { attention: "reply", lastReplyAt: 5, sessionWaiting: false }))).toBe("new");
+		expect(lookOf(row(idA, { attention: "decision", status: "idle" }))?.asks).toBe("act");
+		expect(lookOf(row(idA, { attention: "failed", sessionWaiting: true, status: "deleted" }))).toBeNull();
+		expect(lookOf(row(idA, { attention: "reply", lastReplyAt: 5, sessionWaiting: false }))?.asks).toBe("read");
 	});
 
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
@@ -170,32 +183,6 @@ describe("thread state", () => {
 		expect(ago(asked, asked + 5 * 60_000)).toBe("5 min ago");
 		expect(clock(72_000)).toBe("1m 12s");
 		expect(clock(3_725_000)).toBe("1h 2m");
-	});
-});
-
-describe("picker rows", () => {
-	const all = [
-		row(idA, { project: "nexus", title: "Old", createdAt: 1 }),
-		row(idB, { project: "nexus", title: "New", createdAt: 2 }),
-		row(idC, { project: "nexus", title: "Gone", status: "archived" }),
-		row("th-ffff00002222", { project: "nexus", title: "Removed", status: "deleted" }),
-		row("th-ffff00003333", { project: "loose", title: "Elsewhere" }),
-	];
-	const labels = (rows: ReturnType<typeof pickerRows>) =>
-		rows.map((r) => (r.kind === "thread" ? r.thread.title : r.kind === "fold" ? `${r.open ? "v" : ">"} ${r.label}` : r.kind === "project" ? `# ${r.project} ${r.count}` : "+"));
-
-	test("groups by project, open threads newest first, closed ones folded", () => {
-		const rows = pickerRows(groups(all, [project]), new Set(), "");
-		expect(labels(rows)).toEqual(["+", "# nexus 2", "New", "Old", "> 1 archived, 1 deleted", "# loose 1", "Elsewhere"]);
-	});
-
-	test("an unfolded project shows its closed threads", () => {
-		expect(labels(pickerRows(groups(all, [project]), new Set(["nexus"]), "")).slice(4, 7)).toEqual(["v 1 archived, 1 deleted", "Gone", "Removed"]);
-	});
-
-	test("a filter matches titles and IDs, opens folds it matches and hides empty projects", () => {
-		expect(labels(pickerRows(groups(all, [project]), new Set(), "gone"))).toEqual(["# nexus 2", "v 1 archived", "Gone"]);
-		expect(labels(pickerRows(groups(all, [project]), new Set(), "3333"))).toEqual(["# loose 1", "Elsewhere"]);
 	});
 });
 
@@ -360,6 +347,9 @@ describe("previews and starting", () => {
 		expect(startHint(project, { title: "", project: "nexus", node: "nuc", branch: "dev", message: "" })).toBe("Boots a pylon on nuc and checks out dev.");
 		const scratch = { ...project, repoUrl: null };
 		expect(startHint(scratch, { title: "", project: "nexus", node: "", branch: "dev", message: "" })).toBe("Boots a pylon on firebat and starts an empty repository on dev.");
+		const placed = { ...project, defaultNode: "auto" };
+		expect(startHint(placed, { title: "", project: "nexus", node: "", branch: "", message: "" })).toBe("Boots a pylon on the node with the most room left and checks out main.");
+		expect(startHint(placed, { title: "", project: "nexus", node: "nuc", branch: "", message: "" })).toBe("Boots a pylon on nuc and checks out main.");
 	});
 });
 

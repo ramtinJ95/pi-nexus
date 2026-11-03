@@ -32,8 +32,8 @@ export type Diff = Static<typeof Diff>;
 const ThreadStatus = Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("archived"), Type.Literal("deleted")]);
 export type ThreadStatus = Static<typeof ThreadStatus>;
 
-/** What the planner wants of a thread's pylon. */
-const DesiredPhase = Type.Union([Type.Literal("running"), Type.Literal("paused"), Type.Literal("deleted")]);
+/** What the planner wants of a thread's pylon: `reading` while the usage backfill reads an archived thread's pylon (CLI 0.33.0). */
+const DesiredPhase = Type.Union([Type.Literal("running"), Type.Literal("paused"), Type.Literal("deleted"), Type.Literal("reading")]);
 export type DesiredPhase = Static<typeof DesiredPhase>;
 
 const threadFields = {
@@ -49,6 +49,8 @@ const threadFields = {
 	conversationId: Nullable(Type.String()),
 	/** Whether a session in the pylon, a Claude worker's included, runs a turn. Absent from a control plane that reports none. */
 	sessionTurnRunning: Type.Optional(Type.Boolean()),
+	/** The earliest known start of the running turns, absent while none runs or none was recorded starting. */
+	workingSince: Type.Optional(Type.Number()),
 	/** Whether a session in the pylon waits for input, such as at a permission prompt. */
 	sessionWaiting: Type.Optional(Type.Boolean()),
 	/** The caller's node ID, or `nexus-review`, `nexus-check` or `nexus-verify` for a thread the review loop started. */
@@ -189,6 +191,11 @@ export const ThreadDetail = Type.Object({
 	agent: Nullable(Type.Object({ parkedTasks: Type.Number() })),
 	/** The thread's latest review as a builder, or null. Absent from a control plane older than CLI 0.18.0. */
 	review: Type.Optional(Nullable(Review)),
+	/**
+	 * Every question the thread asked, answered or not, a Claude worker's AskUserQuestion among them. Its `text` may
+	 * be several lines. Absent from a control plane older than CLI 0.35.0.
+	 */
+	questions: Type.Optional(Type.Array(Type.Object({ text: Type.String(), answerer: Type.String(), answer: Nullable(Type.Object({})) }))),
 });
 export type ThreadDetail = Static<typeof ThreadDetail>;
 
@@ -218,8 +225,11 @@ export const Seen = Type.Null();
 
 /** Each entry kind of a Claude worker's transcript that pi-nexus shows. */
 export const claudeEntries = {
-	/** `from` is `person`, `command` for a slash command, or another source, such as a plugin. */
-	prompt: Type.Object({ kind: Type.Literal("prompt"), at: Type.Number(), text: Type.String(), from: Type.String() }),
+	/**
+	 * `from` is `person`, `command` for a slash command, or another source, such as a plugin. `images` places each image
+	 * of the prompt in the transcript (CLI 0.44.0), and its text no longer says `[image]`.
+	 */
+	prompt: Type.Object({ kind: Type.Literal("prompt"), at: Type.Number(), text: Type.String(), from: Type.String(), images: Type.Optional(Type.Array(Type.Unknown())) }),
 	reply: Type.Object({ kind: Type.Literal("reply"), text: Type.String() }),
 	tool: Type.Object({ kind: Type.Literal("tool"), id: Type.String(), name: Type.String(), input: Type.Record(Type.String(), Type.Unknown()) }),
 	result: Type.Object({ kind: Type.Literal("result"), toolUseId: Type.String(), output: Type.String(), isError: Type.Boolean() }),

@@ -11,6 +11,7 @@ import {
 	attachCommand,
 	attachHint,
 	badge,
+	decisions,
 	desiredTone,
 	harnessLabel,
 	linkedPort,
@@ -65,7 +66,8 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	kv("Last seen", pylon.observedAt === null ? "never" : `${ago(Date.parse(pylon.observedAt), now)}${offline ? " (stale)" : ""}`);
 	kv("Human", ago(thread.lastHumanActivityAt, now));
 	kv("Agent", thread.agentTurnRunning ? "turn running" : ago(thread.lastAgentActivityAt, now));
-	lines.push(`   ${t.fg("dim", pylon.id)}`);
+	for (const reason of decisions(detail)) w.wrapped(`Needs you: ${reason}`, "error");
+	lines.push(`   ${t.fg("dim", `${thread.id} · ${pylon.id}`)}`);
 	if (pylon.failed !== null) w.wrapped(`The planner gave up: ${pylon.failed}`, "error");
 
 	const outputs = shownOutputs({ ...detail, previews: shown.previews });
@@ -75,7 +77,6 @@ export function detailLines(theme: Theme, detail: ThreadDetail | undefined, node
 	const review = detail.review;
 	if (review) {
 		w.wrapped(`Nexus review ${review.id}: ${review.phase.kind}, round ${review.rounds.length} of ${review.maxRounds}, by ${review.reviewer} on ${review.models.reviewer}${review.land === null ? "" : ", landing when approved"}`, "muted");
-		if (review.phase.kind === "needs-person") for (const reason of review.phase.reasons ?? []) w.wrapped(`Needs you: ${reason}`, "error");
 	}
 
 	w.heading("Attach from a shell in the pylon");

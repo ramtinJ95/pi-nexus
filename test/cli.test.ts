@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createNexus, listThreads, markSeen, readChanges, readConversation, readDiff, sendText, showThread } from "../extensions/nexus/cli.ts";
 import { detail } from "./console-fixture.ts";
-import { fakeNexus, idA, row, type Scenario } from "./fixtures.ts";
+import { fakeNexus, idA, idB, row, type Scenario } from "./fixtures.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
@@ -25,6 +25,21 @@ describe("the CLI's shared seen state", () => {
 	test("an attention value added later still lists the thread", async () => {
 		const n = nexus({ responses: { threads: [row(idA, { attention: "stalled" })] } });
 		expect((await listThreads(n.nexus))[0]!.attention).toBe("stalled");
+	});
+
+	test("an archived thread whose pylon the usage backfill reads still lists, with every other thread", async () => {
+		const n = nexus({ responses: { threads: [row(idA, { status: "archived", desired: "reading" }), row(idB)] } });
+		expect((await listThreads(n.nexus)).map((t) => t.desired)).toEqual(["reading", "running"]);
+	});
+
+	test("a failure line keeps its kind and words, with or without the code CLI 0.51.0 adds", async () => {
+		const refusal = "the control plane at http://nexus.example:7777 runs Nexus 0.40.0, and this CLI needs 0.53.0 or later. Upgrade it, as deploy/README.md describes";
+		const blocked = "Claude waits at a prompt in its terminal, so the message was not typed";
+		const line = (error: string, kind: string, status: number | null, code: string | null) => `${JSON.stringify({ error, kind, status, code })}\n`;
+		const old = nexus({ fail: { threads: { exit: 1, stderr: line(refusal, "failed", null, null) } } });
+		await expect(listThreads(old.nexus)).rejects.toMatchObject({ kind: "failed", message: refusal });
+		const busy = nexus({ fail: { send: { exit: 5, stderr: line(blocked, "conflict", 409, "blocked") } } });
+		await expect(sendText(busy.nexus, idA, "hi", false)).rejects.toMatchObject({ kind: "conflict", message: blocked });
 	});
 
 	test("a session that says it is not waiting still lists the thread", async () => {

@@ -4,7 +4,7 @@
  * key does and what the console says it does cannot drift apart.
  */
 import { rawKeyHint } from "@earendil-works/pi-coding-agent";
-import { decodeKittyPrintable, matchesKey, parseKey, type KeyId } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, matchesKey, parseKey, truncateToWidth, visibleWidth, type KeyId } from "@earendil-works/pi-tui";
 
 /** Keys pi names, matched with matchesKey. Anything else in a table is typed text, such as `j`, `G` or `gg`. */
 const named = new Set(["up", "down", "left", "right", "enter", "escape", "tab", "home", "end", "pageUp", "pageDown"]);
@@ -84,4 +84,20 @@ export function hint<C extends string>(bindings: readonly Binding<C>[], command:
 /** The help: every binding, one per line, its keys in a column. */
 export function helpLines<C extends string>(bindings: readonly Binding<C>[]): { keys: string; help: string }[] {
 	return bindings.map((b) => ({ keys: keysLabel(b), help: b.help }));
+}
+
+/**
+ * A mode line: `lead`, the mode, then the hints that fit `width` whole, in order, and always the last one, so no hint
+ * is cut mid-word and the last, the key help where there is one, shows however narrow.
+ */
+export function modeLine(lead: string, hints: readonly string[], width: number): string {
+	const last = hints.at(-1);
+	let room = width - visibleWidth(lead) - (last === undefined ? 0 : visibleWidth(last) + 2);
+	const shown: string[] = [];
+	for (const h of hints.slice(0, -1)) {
+		room -= visibleWidth(h) + 2;
+		if (room < 0) break;
+		shown.push(h);
+	}
+	return truncateToWidth([lead, ...shown, ...(last === undefined ? [] : [last])].join("  "), width);
 }
