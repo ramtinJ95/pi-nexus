@@ -14,6 +14,7 @@ import {
 	conversationItems,
 	exitCode,
 	groups,
+	markOf,
 	modelOf,
 	pickerRows,
 	previewLook,
@@ -105,6 +106,15 @@ describe("markers", () => {
 			["Review of #1", "needs-you"],
 			["Check of #2", "working"],
 		]);
+		const verify = row(idA, { title: "Verify #3", attention: "reply", lastReplyAt: 5, startedBy: "nexus-verify" });
+		expect(summary([verify])).toBe("nexus 0 working");
+		expect(markOf({ ...verify, sessionWaiting: true })).toBe("needs-you");
+	});
+
+	test("an idle thread needs you as an active one does, a deleted one never, and only a session that says so waits", () => {
+		expect(markOf(row(idA, { attention: "decision", status: "idle" }))).toBe("needs-you");
+		expect(markOf(row(idA, { attention: "failed", sessionWaiting: true, status: "deleted" }))).toBeNull();
+		expect(markOf(row(idA, { attention: "reply", lastReplyAt: 5, sessionWaiting: false }))).toBe("new");
 	});
 
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
