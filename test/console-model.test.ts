@@ -73,6 +73,40 @@ describe("markers", () => {
 		]);
 	});
 
+	test("unread replies of builders, reviewers and check threads need no one, as the dashboard's Needs you says", () => {
+		const id = (n: number) => `th-00000000010${n}`;
+		const builders = [1, 2, 3, 4].map((n) => row(id(n), { title: `Builder ${n}`, attention: "reply", lastReplyAt: n, lastAgentActivityAt: n, startedBy: "nodeA" }));
+		const reviewers = [5, 6, 7].map((n) => row(id(n), { title: `Review of #${n}`, attention: "reply", lastReplyAt: n, lastAgentActivityAt: n, startedBy: "nexus-review" }));
+		const check = row(id(8), { title: "Check of #8", attention: "reply", lastReplyAt: 8, lastAgentActivityAt: 8, startedBy: "nexus-check" });
+		const unreadReply = row(id(9), { title: "Answered", attention: "reply", lastReplyAt: 9, lastAgentActivityAt: 9 });
+		const all = [...builders, ...reviewers, check, unreadReply];
+		expect(summary(all)).toBe("nexus 0 working · 5 new");
+		expect(chips(all).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Answered", "new"],
+			["Builder 4", "new"],
+			["Builder 3", "new"],
+			["Builder 2", "new"],
+			["Builder 1", "new"],
+		]);
+	});
+
+	test("a usage limit or a dialog in the terminal needs you, even behind a new reply or a turn", () => {
+		const limited = row(idA, { title: "Limited", attention: "limited" });
+		const dialog = row(idB, { title: "Dialog", attention: "reply", lastReplyAt: 5, sessionWaiting: true });
+		const busy = row(idC, { title: "Busy", attention: "working", sessionTurnRunning: true, sessionWaiting: true });
+		const closed = row("th-0000000000ee", { attention: "limited", sessionWaiting: true, status: "archived" });
+		expect(summary([limited, dialog, busy, closed])).toBe("nexus 1 working · 3 needs you");
+	});
+
+	test("a loop's thread needs you as any other does, and its reply shows only as work while it works", () => {
+		const failedReview = row(idA, { title: "Review of #1", attention: "failed", startedBy: "nexus-review" });
+		const busyCheck = row(idB, { title: "Check of #2", attention: "reply", lastReplyAt: 5, sessionTurnRunning: true, startedBy: "nexus-check" });
+		expect(chips([failedReview, busyCheck]).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Review of #1", "needs-you"],
+			["Check of #2", "working"],
+		]);
+	});
+
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {
 		const busy = row(idB, { attention: "reply", lastReplyAt: 5, sessionTurnRunning: true });
 		expect(summary([busy])).toBe("nexus 1 working · 1 new");
