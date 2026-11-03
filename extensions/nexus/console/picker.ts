@@ -1,8 +1,8 @@
 /**
  * The thread picker, in pi's selector look: threads grouped by project, open ones first, the archived and deleted
  * ones folded, with the dashboard's overview columns. It shows the project chosen with p, or every project. Its markers
- * are the control plane's attention, which every client shares: a thread whose pylon failed, whose tasks are parked or
- * whose session waits for input says it needs you, and one with a reply nobody has marked seen says it is new.
+ * are the control plane's attention, which every client shares, as markOf reads it: a thread the dashboard's Needs you
+ * lists says it needs you, and one with a reply nobody has marked seen says it is new.
  *
  * Its keys are vim's, as the thread view's are: j and k move, / filters as pi's session picker does when you type,
  * and Enter accepts the filter.

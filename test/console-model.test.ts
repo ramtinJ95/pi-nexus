@@ -14,6 +14,7 @@ import {
 	conversationItems,
 	exitCode,
 	groups,
+	markOf,
 	modelOf,
 	pickerRows,
 	previewLook,
@@ -71,6 +72,49 @@ describe("markers", () => {
 			["Decide", "needs-you"],
 			["Answered", "new"],
 		]);
+	});
+
+	test("unread replies of builders, reviewers and check threads need no one, as the dashboard's Needs you says", () => {
+		const id = (n: number) => `th-00000000010${n}`;
+		const builders = [1, 2, 3, 4].map((n) => row(id(n), { title: `Builder ${n}`, attention: "reply", lastReplyAt: n, lastAgentActivityAt: n, startedBy: "nodeA" }));
+		const reviewers = [5, 6, 7].map((n) => row(id(n), { title: `Review of #${n}`, attention: "reply", lastReplyAt: n, lastAgentActivityAt: n, startedBy: "nexus-review" }));
+		const check = row(id(8), { title: "Check of #8", attention: "reply", lastReplyAt: 8, lastAgentActivityAt: 8, startedBy: "nexus-check" });
+		const unreadReply = row(id(9), { title: "Answered", attention: "reply", lastReplyAt: 9, lastAgentActivityAt: 9 });
+		const all = [...builders, ...reviewers, check, unreadReply];
+		expect(summary(all)).toBe("nexus 0 working · 5 new");
+		expect(chips(all).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Answered", "new"],
+			["Builder 4", "new"],
+			["Builder 3", "new"],
+			["Builder 2", "new"],
+			["Builder 1", "new"],
+		]);
+	});
+
+	test("a usage limit or a dialog in the terminal needs you, even behind a new reply or a turn", () => {
+		const limited = row(idA, { title: "Limited", attention: "limited" });
+		const dialog = row(idB, { title: "Dialog", attention: "reply", lastReplyAt: 5, sessionWaiting: true });
+		const busy = row(idC, { title: "Busy", attention: "working", sessionTurnRunning: true, sessionWaiting: true });
+		const closed = row("th-0000000000ee", { attention: "limited", sessionWaiting: true, status: "archived" });
+		expect(summary([limited, dialog, busy, closed])).toBe("nexus 1 working · 3 needs you");
+	});
+
+	test("a loop's thread needs you as any other does, and its reply shows only as work while it works", () => {
+		const failedReview = row(idA, { title: "Review of #1", attention: "failed", startedBy: "nexus-review" });
+		const busyCheck = row(idB, { title: "Check of #2", attention: "reply", lastReplyAt: 5, sessionTurnRunning: true, startedBy: "nexus-check" });
+		expect(chips([failedReview, busyCheck]).map((c) => [c.thread.title, c.kind])).toEqual([
+			["Review of #1", "needs-you"],
+			["Check of #2", "working"],
+		]);
+		const verify = row(idA, { title: "Verify #3", attention: "reply", lastReplyAt: 5, startedBy: "nexus-verify" });
+		expect(summary([verify])).toBe("nexus 0 working");
+		expect(markOf({ ...verify, sessionWaiting: true })).toBe("needs-you");
+	});
+
+	test("an idle thread needs you as an active one does, a deleted one never, and only a session that says so waits", () => {
+		expect(markOf(row(idA, { attention: "decision", status: "idle" }))).toBe("needs-you");
+		expect(markOf(row(idA, { attention: "failed", sessionWaiting: true, status: "deleted" }))).toBeNull();
+		expect(markOf(row(idA, { attention: "reply", lastReplyAt: 5, sessionWaiting: false }))).toBe("new");
 	});
 
 	test("a Claude worker that starts a turn with a reply still unread counts as working, as attention cannot say", () => {

@@ -49,6 +49,10 @@ const threadFields = {
 	conversationId: Nullable(Type.String()),
 	/** Whether a session in the pylon, a Claude worker's included, runs a turn. Absent from a control plane that reports none. */
 	sessionTurnRunning: Type.Optional(Type.Boolean()),
+	/** Whether a session in the pylon waits for input, such as at a permission prompt. */
+	sessionWaiting: Type.Optional(Type.Boolean()),
+	/** The caller's node ID, or `nexus-review`, `nexus-check` or `nexus-verify` for a thread the review loop started. */
+	startedBy: Type.Optional(Type.String()),
 };
 
 /**
