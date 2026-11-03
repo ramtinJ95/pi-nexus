@@ -278,23 +278,20 @@ export function summary(threads: readonly ThreadRow[], project: string | null = 
 }
 
 /**
- * The strip's one notice: the most urgent of the threads that ask something of the person, its look, and how many
- * threads ask to act and to read, as the status line counts them.
+ * The strip's one notice: the most urgent of the threads that need the person to act, its look, and how many there
+ * are, as the dashboard's Needs you counts them. A new reply waits on no one, so it never shows there.
  */
 export interface Notice {
 	top: ThreadRow;
 	look: Look;
-	acts: number;
-	reads: number;
+	count: number;
 }
 
-/** Null when no thread asks anything of the person, so threads that only work leave the strip empty. */
+/** Null when no thread needs the person, so threads that only work or have a new reply leave the strip empty. */
 export function stripNotice(threads: readonly ThreadRow[]): Notice | null {
-	const asking = threads.filter((t) => lookOf(t)?.asks).sort(urgency);
-	const top = asking[0];
-	if (top === undefined) return null;
-	const acts = asking.filter((t) => lookOf(t)!.asks === "act").length;
-	return { top, look: lookOf(top)!, acts, reads: asking.length - acts };
+	const needs = threads.filter((t) => lookOf(t)?.asks === "act").sort(urgency);
+	const top = needs[0];
+	return top === undefined ? null : { top, look: lookOf(top)!, count: needs.length };
 }
 
 /** How long an open thread whose pylon is down and whose agent is not working stays listed before it folds away as quiet. */

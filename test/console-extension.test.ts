@@ -505,7 +505,7 @@ describe("console", () => {
 		await n.until(() => n.widgets.at(-1)?.[1] !== undefined, "the strip");
 		const [key, strip] = n.widgets.at(-1)!;
 		expect(key).toBe("nexus-strip");
-		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ 1 thread needs you · 1 new");
+		expect(plain(strip!(fakeTui(), piTheme()).render(200))).toBe("nexus  ✕ Broken  failed");
 		await n.run("strip off");
 		// Off stops the polling, so the strip and the summary it keeps go together.
 		expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
@@ -812,7 +812,7 @@ describe("console", () => {
 			expect(n.text()).not.toContain(threads[1]!.title);
 			expect(settings.writes).toEqual([{ project: "spoon" }]);
 			await n.until(() => n.statuses.at(-1) === "nexus spoon · 0 working · 1 new", "the summary of spoon");
-			expect(plain(n.widgets.at(-1)![1]!(fakeTui(), piTheme()).render(200))).toBe("nexus · spoon  ● Spoon work  new reply");
+			expect(n.widgets.at(-1)).toEqual(["nexus-strip", undefined]);
 			n.press("q");
 			await done;
 			const later = load(idleScenario, { settings });

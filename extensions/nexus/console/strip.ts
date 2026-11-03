@@ -1,8 +1,8 @@
 /**
  * The strip above pi's editor: one notice when something in Nexus asks for you, as the control plane's attention
- * says, and nothing while threads only work. It names the most urgent thread with what it asks, or counts the threads
- * that need you and those with a new reply, as the status line does, in the look of the most urgent, always on one
- * row. Until the threads are first read, it says why they could not be, on up to three rows. It shows from the
+ * says, and nothing while threads only work or have a new reply, as the dashboard's Needs you leaves those out. It
+ * names the most urgent thread with what it asks, or counts the threads that need you, in the look of the most urgent,
+ * always on one row. Until the threads are first read, it says why they could not be, on up to three rows. It shows from the
  * session's start, and `/nexus strip off` hides it. Scoped to one project, it names the project after `nexus` while
  * there is room.
  */
@@ -18,13 +18,8 @@ const failureRows = 3;
 /** The least a thread's title takes beside the project's name; narrower, the name goes. */
 const leastTitle = 8;
 
-/** Several threads that ask for the person, counted in the status line's words, widest first. */
-function counts(acts: number, reads: number): string[] {
-	const needs = (threads: boolean) => `${acts} ${threads ? (acts === 1 ? "thread needs" : "threads need") : acts === 1 ? "needs" : "need"} you`;
-	if (acts === 0) return [`${reads} new replies`, `${reads} new`];
-	if (reads === 0) return [needs(true), needs(false)];
-	return [`${needs(true)} · ${reads} new`, `${needs(false)} · ${reads} new`, needs(false)];
-}
+/** Several threads that need the person, widest first. */
+const counts = (count: number) => [`${count} threads need you`, `${count} need you`];
 
 export class Strip implements Component {
 	constructor(
@@ -42,16 +37,16 @@ export class Strip implements Component {
 			const lines = wrapTextWithAnsi(this.shows.message, Math.max(10, width - indent)).slice(0, failureRows);
 			return lines.map((line, i) => truncateToWidth(`${i === 0 ? `${head(false)}  ` : " ".repeat(indent)}${t.fg("error", line)}`, width));
 		}
-		const { top, look, acts, reads } = this.shows.notice;
+		const { top, look, count } = this.shows.notice;
 		const color = toneColor[look.tone];
 		const room = (named: boolean) => width - visibleWidth(head(named)) - 2 - visibleWidth(look.glyph) - 1;
 		let line: string;
-		if (acts + reads === 1) {
+		if (count === 1) {
 			const word = visibleWidth(look.word) + 2;
 			const named = room(true) - word >= leastTitle;
 			line = `${head(named)}  ${t.fg(color, look.glyph)} ${truncateToWidth(top.title, Math.max(1, room(named) - word), "…")}  ${t.fg(color, look.word)}`;
 		} else {
-			const many = counts(acts, reads);
+			const many = counts(count);
 			const named = room(true) >= visibleWidth(many[0]!);
 			line = `${head(named)}  ${t.fg(color, look.glyph)} ${t.bold(many.find((text) => visibleWidth(text) <= room(named)) ?? many.at(-1)!)}`;
 		}

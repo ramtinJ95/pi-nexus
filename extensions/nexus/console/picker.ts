@@ -1,9 +1,9 @@
 /**
  * The thread picker, in pi's selector look, after the dashboard's home: what needs you to act first, under Needs you,
  * then each project's threads, newest first, the ones quiet for over 8 hours and the archived or deleted ones folded.
- * Colour and words show only where the control plane's attention, which every client shares, asks something of the
- * person: a row that needs you, or has a reply nobody has marked seen, is bright, with its dot in the attention's
- * colour and its word beside its age. Every other row is dim, its dot's shape its state, as the dashboard dims it.
+ * Words show only where the control plane's attention, which every client shares, needs the person to act: such a
+ * row is bright, with its dot in the attention's colour and its word beside its age. Every other row is dim, its
+ * dot's shape its state, as the dashboard dims it, and a reply nobody has marked seen only colours that dot.
  * The selected row says where its pylon is, when you and the agent were last active, and its ID. It shows the project
  * chosen with p, or every project.
  *
@@ -212,12 +212,13 @@ export class Picker implements Component, Focusable {
 	private threadLine(th: ThreadRow, selected: boolean, needs: boolean, width: number): string {
 		const t = this.theme;
 		const look = lookOf(th);
-		const asking = look?.asks ? look : null;
+		const asking = look?.asks === "act" ? look : null;
+		const unread = look?.asks === "read" ? look : null;
 		const [, tone] = threadState(th, th.pylon.actualState, isWorking(th));
 		const since = th.workingSince === undefined ? null : span(th.workingSince, this.now());
 		const age = isWorking(th) && !asking ? ["working", since].filter(Boolean).join(" ") : (span(lastActive(th), this.now()) ?? "now");
 		const right = `${asking ? `${t.fg(toneColor[asking.tone], asking.word)}  ` : ""}${t.fg("dim", age.padStart(6))}`;
-		const dot = asking ? t.fg(toneColor[asking.tone], asking.glyph) : t.fg("dim", toneGlyph[tone]);
+		const dot = asking ? t.fg(toneColor[asking.tone], asking.glyph) : unread ? t.fg(toneColor[unread.tone], toneGlyph[tone]) : t.fg("dim", toneGlyph[tone]);
 		const project = needs ? t.fg("dim", `${th.project} / `) : "";
 		const title = selected ? t.fg("accent", th.title) : asking ? th.title : t.fg("muted", th.title);
 		const left = truncateToWidth(` ${selected ? t.fg("accent", "→ ") : "  "}${dot} ${project}${title}`, Math.max(10, width - visibleWidth(right) - 2));

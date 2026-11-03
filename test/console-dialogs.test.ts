@@ -44,22 +44,22 @@ describe("picker", () => {
 		expect(out).toMatch(/▾ site  trunk\n/);
 	});
 
-	test("ages and words sit at the right edge, whatever the width, and a narrow terminal cuts the title rather than them", () => {
+	test("ages and words sit at the right edge, whatever the width, a new reply adds no word, and a narrow terminal cuts the title rather than them", () => {
 		const list = [
 			{ ...threads[0]!, title: "Fix the probe retry so that it backs off and gives up after a while", workingSince: asked - 11 * 60_000 },
 			{ ...threads[1]!, createdAt: asked - 11 * 60_000, attention: "reply" },
 		];
 		for (const width of [140, 60, 40]) {
-			const [fix, docs] = open(width, list).text().split("\n").filter((l) => /[◉●]/.test(l));
+			const [fix, docs] = open(width, list).text().split("\n").filter((l) => /[◉●○]/.test(l));
 			expect(fix).toEndWith("working 12 min");
-			expect(docs).toEndWith("new reply  12 min");
+			expect(docs).toMatch(/Docs pass +12 min$/);
 			expect(fix!.length).toBe(width);
 			expect(docs!.length).toBe(width);
 		}
 		expect(open(40, list).text()).toMatch(/◉ Fix the probe \S*\.\.\. +working 12 min\n/);
 	});
 
-	test("colour shows only where a thread asks something of you: a running pylon whose agent is idle is dim, not green", () => {
+	test("colour shows only where a thread asks something of you: a running pylon whose agent is idle is dim, not green, and a new reply only colours its dot", () => {
 		const t = piTheme();
 		const list = [
 			row(idA, { project: "nexus", title: "Idle on a running pylon", createdAt: asked }),
@@ -71,7 +71,8 @@ describe("picker", () => {
 		expect(line("Idle on a running pylon")).toContain(t.fg("dim", "●"));
 		expect(lines.join("\n")).not.toContain(t.fg("success", "●"));
 		expect(line("Unread")).toContain(t.fg("accent", "●"));
-		expect(line("Unread")).toContain(t.fg("accent", "new reply"));
+		expect(line("Unread")).toContain(t.fg("muted", "Unread"));
+		expect(lines.join("\n")).not.toContain("new reply");
 		expect(line("Broken")).toContain(t.fg("error", "✕"));
 		expect(line("Broken")).toContain(t.fg("error", "failed"));
 	});
@@ -171,7 +172,7 @@ describe("picker", () => {
 		]);
 	});
 
-	test("what needs you to act lists first, under Needs you, in the control plane's order with its words, and a new reply stays bright in its project", () => {
+	test("what needs you to act lists first, under Needs you, in the control plane's order with its words, and a new reply stays in its project with no word", () => {
 		const marked = (title: string, attention: string | null, extra: Partial<ThreadRow> = {}) =>
 			row(`th-0000000000${title.length.toString(16).padStart(2, "0")}`, { project: "nexus", title, createdAt: asked - title.length, attention, ...extra });
 		const list = [
@@ -196,7 +197,7 @@ describe("picker", () => {
 			"◇ nexus / Waiting session | waiting for input | 1 min",
 		]);
 		const nexus = out.slice(out.indexOf("▾ nexus"));
-		expect(nexus).toMatch(/● Unseen reply +new reply +1 min\n/);
+		expect(nexus).toMatch(/● Unseen reply +1 min\n/);
 		expect(nexus).toMatch(/◉ Agent at work +working\n/);
 		expect(nexus).toMatch(/● From the future +1 min\n/);
 		expect(nexus).not.toContain("Failed pylon");
@@ -222,7 +223,7 @@ describe("picker", () => {
 		p.press(keys.enter);
 		expect(p.text()).toContain("▾ 2 quiet for over 8 hours");
 		expect(p.text()).toMatch(/○ Asleep a day +24 h\n/);
-		expect(p.text()).toMatch(/● Asleep with news +new reply +9 h\n/);
+		expect(p.text()).toMatch(/○ Asleep with news +9 h\n/);
 	});
 
 	test("the selected row says where its pylon is and what is wanted of it, when you and the agent were last active, and its ID", () => {

@@ -62,31 +62,28 @@ describe("the status line and the strip", () => {
 
 	test("a Claude worker stopped on its usage limit needs you, as a failed pylon does", () => {
 		expect(summary([limited, reply])).toBe("nexus 0 working · 1 needs you · 1 new");
-		expect(strip([reply, limited])).toBe("nexus  ◷ 1 thread needs you · 1 new");
+		expect(strip([reply, limited])).toBe("nexus  ◷ Out of tokens  usage limit");
 		expect(strip([limited])).toBe("nexus  ◷ Out of tokens  usage limit");
 	});
 
-	test("the strip is one notice, in the look of the most urgent thread, and counts the threads that ask for you as the status line does", () => {
+	test("the strip is one notice, in the look of the most urgent thread, and counts the threads the dashboard's Needs you lists", () => {
 		const unknown = row("th-0000000000cc", { attention: "stalled" });
-		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 2 threads need you · 1 new");
-		expect(strip([claude, reply])).toBe("nexus  ● Answered  new reply");
+		expect(strip([claude, reply, archived, failed, unknown, waiting])).toBe("nexus  ✕ 2 threads need you");
 		expect(strip([claude, waiting])).toBe("nexus  ◇ Waiting  waiting for input");
-		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! 1 thread needs you · 1 new");
+		expect(strip([reply, row("th-0000000000dd", { title: "Decide", attention: "decision" })])).toBe("nexus  ! Decide  needs your decision");
 	});
 
-	test("threads that only work, or ask nothing this table knows, leave the strip empty", () => {
-		expect(strip([claude, archived, row("th-0000000000cc", { attention: "stalled" }), row("th-0000000000dd")])).toBeNull();
+	test("threads that only work, have a new reply, or ask nothing this table knows, leave the strip empty", () => {
+		expect(strip([claude, reply, archived, row("th-0000000000cc", { attention: "stalled" }), row("th-0000000000dd")])).toBeNull();
 	});
 
 	test("the strip fits one row: the project's name goes before the title gets short, and the count shortens", () => {
-		const long = row(idA, { title: "A very long thread title that goes on", attention: "reply" });
-		expect(strip([long], 200, "spoon")).toBe("nexus · spoon  ● A very long thread title that goes on  new reply");
-		expect(strip([long], 40, "spoon")).toBe("nexus · spoon  ● A very long…  new reply");
-		expect(strip([long], 32, "spoon")).toBe("nexus  ● A very long…  new reply");
-		expect(strip([failed, reply, waiting], 40)).toBe("nexus  ✕ 2 threads need you · 1 new");
-		expect(strip([failed, reply, waiting], 30)).toBe("nexus  ✕ 2 need you · 1 new");
+		const long = row(idA, { title: "A very long thread title that goes on", attention: "failed" });
+		expect(strip([long], 200, "spoon")).toBe("nexus · spoon  ✕ A very long thread title that goes on  failed");
+		expect(strip([long], 36, "spoon")).toBe("nexus · spoon  ✕ A very lon…  failed");
+		expect(strip([long], 26, "spoon")).toBe("nexus  ✕ A very l…  failed");
+		expect(strip([failed, reply, waiting], 40)).toBe("nexus  ✕ 2 threads need you");
 		expect(strip([failed, reply, waiting], 24)).toBe("nexus  ✕ 2 need you");
-		expect(strip([reply, { ...reply, id: idC }])).toBe("nexus  ● 2 new replies");
 		for (let width = 16; width <= 80; width++) {
 			for (const threads of [[long], [failed, reply, waiting]]) {
 				const line = new Strip(piTheme(), { kind: "notice", notice: stripNotice(threads)! }, "spoon").render(width);
@@ -104,7 +101,7 @@ describe("the status line and the strip", () => {
 		const unreadReply = row(id(9), { title: "Answered", attention: "reply", lastReplyAt: 9, lastAgentActivityAt: 9 });
 		const all = [...builders, ...reviewers, check, unreadReply];
 		expect(summary(all)).toBe("nexus 0 working · 5 new");
-		expect(strip(all)).toBe("nexus  ● 5 new replies");
+		expect(strip(all)).toBeNull();
 	});
 
 	test("a usage limit or a dialog in the terminal needs you, even behind a new reply or a turn", () => {
