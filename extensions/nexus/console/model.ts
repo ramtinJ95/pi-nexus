@@ -238,12 +238,26 @@ export const looks = {
 type Attention = keyof typeof looks;
 const known = (attention: string | null): attention is Attention => attention !== null && Object.hasOwn(looks, attention);
 
-/** How an open thread's attention shows. An archived or deleted thread, or an attention added after this table, shows none. */
-export const lookOf = (t: ThreadRow): Look | null => (isClosed(t) || !known(t.attention) ? null : looks[t.attention]);
+/** Who starts the review loop's reviewers, check threads and verify pylons, whose replies the loop reads, not the person. */
+const loopStarters: ReadonlySet<string> = new Set(["nexus-review", "nexus-check", "nexus-verify"]);
+
+/**
+ * How an open thread shows, as the dashboard's Needs you reads it. An archived or deleted thread, or an attention
+ * added after this table, shows none. A dialog in the terminal waits on the person even when a reply or a turn
+ * outranks it in attention.
+ */
+export function lookOf(t: ThreadRow): Look | null {
+	if (isClosed(t)) return null;
+	const look = known(t.attention) ? looks[t.attention] : null;
+	if (look?.asks !== "act" && t.sessionWaiting === true) return looks.waiting;
+	if (look === looks.reply && t.startedBy !== undefined && loopStarters.has(t.startedBy)) return isWorking(t) ? looks.working : null;
+	return look;
+}
 
 /** Most urgent first, by the control plane's order, and the newest first among equals. */
-const urgency = (a: ThreadRow, b: ThreadRow) =>
-	Object.keys(looks).indexOf(a.attention!) - Object.keys(looks).indexOf(b.attention!) || lastActivityAt(b) - lastActivityAt(a);
+const order: readonly Look[] = Object.values(looks);
+const rank = (t: ThreadRow) => order.indexOf(lookOf(t)!);
+const urgency = (a: ThreadRow, b: ThreadRow) => rank(a) - rank(b) || lastActivityAt(b) - lastActivityAt(a);
 
 /** Whether the latest reply came after anyone, in any client, last marked it seen. */
 export const unread = (t: Pick<ThreadRow, "seenAt" | "lastReplyAt">) => t.lastReplyAt !== null && (t.seenAt === null || t.lastReplyAt > t.seenAt);

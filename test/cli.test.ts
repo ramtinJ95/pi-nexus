@@ -42,6 +42,11 @@ describe("the CLI's shared seen state", () => {
 		await expect(sendText(busy.nexus, idA, "hi", false)).rejects.toMatchObject({ kind: "conflict", message: blocked });
 	});
 
+	test("a session that says it is not waiting still lists the thread", async () => {
+		const n = nexus({ responses: { threads: [row(idA, { sessionWaiting: false })] } });
+		expect((await listThreads(n.nexus))[0]!.sessionWaiting).toBe(false);
+	});
+
 	test("a reply without the fields from a CLI older than 0.10.0 names the version it needs", async () => {
 		const { seenAt: _seenAt, ...old } = row(idA);
 		const { attention: _attention, ...oldDetail } = detail;

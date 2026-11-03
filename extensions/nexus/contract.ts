@@ -51,6 +51,10 @@ const threadFields = {
 	sessionTurnRunning: Type.Optional(Type.Boolean()),
 	/** The earliest known start of the running turns, absent while none runs or none was recorded starting. */
 	workingSince: Type.Optional(Type.Number()),
+	/** Whether a session in the pylon waits for input, such as at a permission prompt. */
+	sessionWaiting: Type.Optional(Type.Boolean()),
+	/** The caller's node ID, or `nexus-review`, `nexus-check` or `nexus-verify` for a thread the review loop started. */
+	startedBy: Type.Optional(Type.String()),
 };
 
 /**
