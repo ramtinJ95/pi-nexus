@@ -5,7 +5,7 @@
  */
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ClaudeConversation, DesiredPhase, ListeningPort, LiveRun, OpenedSession, Preview, Project, RenderedEntry, Session, Thread, ThreadDetail, ThreadRow, ThreadState, ThreadStatus, ToolCallPart, ToolResultMessage } from "../contract.ts";
-import { claudeUnwritten, contentText, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
+import { claudeUnwritten, contentText, isWorking, lastActivityAt, portBusy, promptLabel, workingCount } from "../thread.ts";
 
 /** The colour of a status dot. `work` is an agent mid-turn, `busy` a pylon changing phase. */
 export type Tone = "ok" | "work" | "busy" | "idle" | "bad" | "muted";
@@ -224,15 +224,26 @@ export function groups(threads: readonly ThreadRow[], projects: readonly Project
 export type Mark = "needs-you" | "new" | "working";
 
 /**
- * The control plane's attention as a marker. Only the person can retry a failed pylon or parked tasks, decide what a
- * review left to them, or answer a session waiting for input. An attention value this table does not know shows no
- * marker.
+ * The control plane's attention as a marker, as the dashboard's Needs you reads it. Only the person can retry a failed
+ * pylon or parked tasks, decide what a review or a question left to them, continue past a usage limit, or answer a
+ * session waiting for input. A new reply waits on no one. An attention value this table does not know shows no marker.
  */
-const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", decision: "needs-you", parked: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
+const marks: Readonly<Record<string, Mark>> = { failed: "needs-you", decision: "needs-you", parked: "needs-you", limited: "needs-you", waiting: "needs-you", reply: "new", working: "working" };
 
-/** An archived or deleted thread wants nothing. */
-export const markOf = (t: ThreadRow): Mark | null =>
-	isClosed(t) || t.attention === null || !Object.hasOwn(marks, t.attention) ? null : marks[t.attention]!;
+/** Who starts the review loop's reviewers, check threads and verify pylons, whose replies the loop reads, not the person. */
+const loopStarters: ReadonlySet<string> = new Set(["nexus-review", "nexus-check", "nexus-verify"]);
+
+/**
+ * An archived or deleted thread wants nothing. A dialog in the terminal waits on the person even when a reply or a
+ * turn outranks it in attention.
+ */
+export function markOf(t: ThreadRow): Mark | null {
+	if (isClosed(t)) return null;
+	const mark = t.attention !== null && Object.hasOwn(marks, t.attention) ? marks[t.attention]! : null;
+	if (mark !== "needs-you" && t.sessionWaiting === true) return "needs-you";
+	if (mark === "new" && t.startedBy !== undefined && loopStarters.has(t.startedBy)) return isWorking(t) ? "working" : null;
+	return mark;
+}
 
 /** Whether the latest reply came after anyone, in any client, last marked it seen. */
 export const unread = (t: Pick<ThreadRow, "seenAt" | "lastReplyAt">) => t.lastReplyAt !== null && (t.seenAt === null || t.lastReplyAt > t.seenAt);
