@@ -1,4 +1,5 @@
 # pi-nexus
+> **Moved:** this package now lives in [ramtinJ95/ramtin-pi-stuff](https://github.com/ramtinJ95/ramtin-pi-stuff/tree/main/packages/pi-nexus). This repository is archived; open issues and pull requests there.
 
 Drive [Nexus](https://github.com/ramtinJ95/nexus) threads from [Pi](https://github.com/earendil-works/pi-mono).
 
